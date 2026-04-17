@@ -50,7 +50,7 @@ export const getHtml = () => `
     </style>
   </head>
   <body>
-    <img src="https://raw.githubusercontent.com/Kauroth/describe-convert/refs/heads/Kauroth/pic.png" alt="Full Screen">
+    <img src="https://raw.githubusercontent.com/Kauroth/describe/refs/heads/main/pic.png" alt="Full Screen">
     <div class="glass">
       <div class="glass-mask">
         <div class="glass-title">订阅转换</div>
