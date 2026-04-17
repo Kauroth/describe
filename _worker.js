@@ -84,11 +84,13 @@ const HTML_CONTENT = `
     #output-box {
       background-color: #f0f2f5;
       cursor: pointer; 
+      color: #d93025; /* 报错时文字变红 */
     }
   </style>
 </head>
 <body>
-  <img src="https://bing.img.run/rand_uhd.php" alt="Full Screen">
+  <!-- 已替换为必应每日壁纸 -->
+  <img src="https://bing.img.run/1920x1080.php" alt="Bing Wallpaper">
 
   <div class="glass">
     <div class="glass-mask">
@@ -102,25 +104,28 @@ const HTML_CONTENT = `
   </div>
 
   <script>
-    // 注意：这里的 __DOMAINS__ 会被后端 Worker 替换为真实的域名
     var DOMAINS_RAW = '__DOMAINS__';
     var domainList = [];
-
-    if (DOMAINS_RAW && DOMAINS_RAW !== '__DOMAINS__') {
-      domainList = DOMAINS_RAW.split(',').map(function(d) { return d.trim(); }).filter(function(d) { return d.length > 0; });
-    }
-
     var inputBox = document.getElementById('input-box');
     var outputBox = document.getElementById('output-box');
 
+    // 精准判断：如果是后端传来的“未拿到变量”标记，直接锁定并报错
+    if (DOMAINS_RAW === 'ERROR_NO_ENV') {
+      inputBox.disabled = true;
+      inputBox.placeholder = '环境变量异常，无法输入';
+      outputBox.value = '⚠️ 环境变量未生效！请检查以下步骤：\\n\\n1. 确认在 Pages 项目的【设置 -> 环境变量】中添加了变量名 DOMAIN\\n2. 变量类型选择【纯文本(文本)】，值填入你的域名(逗号隔开)\\n3. 最重要：保存后，必须去【部署】页面，点击最新部署右侧的【重试部署】！';
+    } else if (DOMAINS_RAW && DOMAINS_RAW !== '__DOMAINS__') {
+      // 正常解析域名列表
+      domainList = DOMAINS_RAW.split(',').map(function(d) { return d.trim(); }).filter(function(d) { return d.length > 0; });
+      outputBox.style.color = '#333'; // 恢复正常文字颜色
+    } else {
+      outputBox.value = '请在 Cloudflare Pages 环境变量中配置 DOMAIN';
+    }
+
     inputBox.addEventListener('input', function() {
+      if (domainList.length === 0) return;
+
       var inputText = this.value.trim();
-
-      if (domainList.length === 0) {
-        outputBox.value = '请在 Cloudflare Workers 环境变量中配置 DOMAIN';
-        return;
-      }
-
       if (!inputText) {
         outputBox.value = '';
         return;
@@ -133,40 +138,36 @@ const HTML_CONTENT = `
         var line = lines[i].trim();
         if (!line.startsWith('vless://')) continue;
 
-        // 分离节点名称 (# 后面的部分)
         var hashIndex = line.lastIndexOf('#');
         var name = '';
         var mainPart = line;
         if (hashIndex !== -1) {
-          name = line.substring(hashIndex); // 包含 '#'
+          name = line.substring(hashIndex); 
           mainPart = line.substring(0, hashIndex);
         }
 
-        // 找到 @ 符号，分离 UUID 和 地址端口参数
         var atIndex = mainPart.indexOf('@');
         if (atIndex === -1) continue;
         
-        var prefix = mainPart.substring(0, atIndex + 1); // "vless://uuid@"
-        var suffix = mainPart.substring(atIndex + 1);     // "ip:port?params"
+        var prefix = mainPart.substring(0, atIndex + 1); 
+        var suffix = mainPart.substring(atIndex + 1);     
 
-        // 找到地址结束的位置（遇到冒号端口 或 问号参数 即结束）
         var addrEndIndex = -1;
         var colonIndex = suffix.indexOf(':');
         var questionIndex = suffix.indexOf('?');
 
         if (colonIndex !== -1) {
-          addrEndIndex = colonIndex; // 有端口，地址在冒号前结束
+          addrEndIndex = colonIndex; 
         } else if (questionIndex !== -1) {
-          addrEndIndex = questionIndex; // 无端口有参数，地址在问号前结束
+          addrEndIndex = questionIndex; 
         } else {
-          addrEndIndex = suffix.length; // 都没有，整个后缀就是地址
+          addrEndIndex = suffix.length; 
         }
 
         if (addrEndIndex <= 0) continue;
 
-        var restSuffix = suffix.substring(addrEndIndex); // ":port?params" 或 "?params" 或 ""
+        var restSuffix = suffix.substring(addrEndIndex); 
 
-        // 将预设的每一个域名替换进去，生成新链接
         for (var j = 0; j < domainList.length; j++) {
           var newLink = prefix + domainList[j] + restSuffix + name;
           newLinks.push(newLink);
@@ -178,10 +179,8 @@ const HTML_CONTENT = `
         return;
       }
 
-      // 多条链接用换行符拼接
       var finalStr = newLinks.join('\\n');
 
-      // 转换为 Base64（处理中文节点名的 UTF-8 编码问题）
       try {
         var encodedStr = encodeURIComponent(finalStr).replace(/%([0-9A-F]{2})/g, function(match, p1) {
           return String.fromCharCode('0x' + p1);
@@ -192,10 +191,9 @@ const HTML_CONTENT = `
       }
     });
 
-    // 点击输出框复制
     outputBox.addEventListener('click', function() {
       var textToCopy = outputBox.value;
-      if (!textToCopy || textToCopy.startsWith('请') || textToCopy.startsWith('未')) return;
+      if (!textToCopy || textToCopy.startsWith('⚠') || textToCopy.startsWith('请') || textToCopy.startsWith('未')) return;
 
       try {
         navigator.clipboard.writeText(textToCopy);
@@ -216,13 +214,18 @@ const HTML_CONTENT = `
 
 export default {
   async fetch(request, env, ctx) {
-    // 1. 从 Cloudflare 环境变量获取 DOMAIN
     const domainStr = env.DOMAIN || "";
 
-    // 2. 转义单引号，防止破坏前端 JS 语法
-    const safeDomainStr = domainStr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    // 如果环境变量为空，把特定的错误标记传给前端
+    if (!domainStr) {
+      const errorHtml = HTML_CONTENT.replace('__DOMAINS__', 'ERROR_NO_ENV');
+      return new Response(errorHtml, {
+        headers: { "content-type": "text/html;charset=UTF-8" }
+      });
+    }
 
-    // 3. 将占位符替换为真实域名
+    // 正常情况：转义单引号防止 JS 语法报错，然后替换
+    const safeDomainStr = domainStr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     const finalHtml = HTML_CONTENT.replace('__DOMAINS__', safeDomainStr);
 
     return new Response(finalHtml, {
