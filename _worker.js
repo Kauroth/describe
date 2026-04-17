@@ -96,7 +96,7 @@ const HTML_CONTENT = `
       <div class="glass-title">订阅转换</div>
       
       <div class="box-container">
-        <textarea id="input-box" placeholder="请输入原始 VLESS 节点链接（支持批量）..."></textarea>
+        <textarea id="input-box" placeholder="支持粘贴 vless:// 链接 或 Base64 订阅内容..."></textarea>
         <textarea id="output-box" placeholder="生成的 Clash 订阅链接将在这里显示（点击复制）" readonly></textarea>
       </div>
     </div>
@@ -117,7 +117,26 @@ const HTML_CONTENT = `
       outputBox.style.color = '#333'; 
     }
 
-    // 1. 全面解析 VLESS 参数
+    // 清除不可见控制字符
+    function cleanStr(str) {
+      return String(str).replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
+    }
+
+    // 安全解码 Base64（兼容中文 UTF-8）
+    function decodeBase64(str) {
+      try {
+        var binary = atob(str);
+        var bytes = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return new TextDecoder('utf-8').decode(bytes);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // 解析 VLESS
     function parseVless(line) {
       line = line.trim();
       if (!line.startsWith('vless://')) return null;
@@ -156,13 +175,16 @@ const HTML_CONTENT = `
       } catch (e) { return null; }
     }
 
-    // 2. 生成 Clash (Mihomo) YAML 节点
+    // 生成 Clash YAML
     function buildClashYaml(node, newAddress) {
       var p = node.params;
       var type = (p.type || 'tcp').toLowerCase();
-      if (type === 'splithttp') type = 'xhttp'; // 兼容 splithttp 别名
+      if (type === 'splithttp') type = 'xhttp';
       
-      var yaml = '  - name: "' + node.name + '_' + newAddress + '"\\n';
+      // 转义节点名里的双引号，防止破坏 YAML 结构
+      var safeName = node.name.replace(/"/g, '\\"');
+
+      var yaml = '  - name: "' + safeName + '_' + newAddress + '"\\n';
       yaml += '    type: vless\\n';
       yaml += '    server: ' + newAddress + '\\n';
       yaml += '    port: ' + node.port + '\\n';
@@ -176,14 +198,12 @@ const HTML_CONTENT = `
       if (p.sni) yaml += '    servername: ' + p.sni + '\\n';
       if (p.fp) yaml += '    client-fingerprint: ' + p.fp + '\\n';
 
-      // Reality 特有参数
       if (p.security === 'reality') {
         yaml += '    reality-opts:\\n';
         if (p.pbk) yaml += '      public-key: ' + p.pbk + '\\n';
         if (p.sid) yaml += '      short-id: ' + p.sid + '\\n';
       }
 
-      // 传输协议参数 (XHTTP, WS, GRPC, H2)
       if (type === 'xhttp') {
         yaml += '    xhttp-opts:\\n';
         yaml += '      path: "' + (p.path || '/') + '"\\n';
@@ -205,35 +225,43 @@ const HTML_CONTENT = `
       return yaml;
     }
 
-    // 3. 监听输入并执行转换
+    // 监听输入
     inputBox.addEventListener('input', function() {
       if (domainList.length === 0) return;
-      var inputText = this.value.trim();
-      if (!inputText) { outputBox.value = ''; return; }
+      var rawInput = cleanStr(this.value.trim());
+      if (!rawInput) { outputBox.value = ''; return; }
 
-      var lines = inputText.split('\\n');
+      var actualText = rawInput;
+
+      // 智能识别：如果不是 vless:// 开头，尝试当 Base64 解码
+      if (!rawInput.startsWith('vless://')) {
+        var decoded = decodeBase64(rawInput);
+        if (decoded && decoded.includes('vless://')) {
+          actualText = decoded;
+        }
+      }
+
+      // 兼容不同系统的换行符进行分割
+      var lines = actualText.split(/\\r?\\n/);
       var yamlProxies = '';
 
       for (var i = 0; i < lines.length; i++) {
         var node = parseVless(lines[i]);
         if (!node) continue;
 
-        // 遍历环境变量里的域名，生成多份节点
         for (var j = 0; j < domainList.length; j++) {
           yamlProxies += buildClashYaml(node, domainList[j]) + '\\n';
         }
       }
 
       if (!yamlProxies) {
-        outputBox.value = '未检测到有效的 VLESS 链接';
+        outputBox.value = '未检测到有效的 VLESS 链接（请确认输入的是 VLESS 节点或 Base64）';
         return;
       }
 
-      // 拼接成完整的 Clash YAML 片段
       var finalYaml = 'proxies:\\n' + yamlProxies;
 
       try {
-        // 处理中文编码转 Base64
         var encodedStr = encodeURIComponent(finalYaml).replace(/%([0-9A-F]{2})/g, function(match, p1) {
           return String.fromCharCode('0x' + p1);
         });
@@ -246,10 +274,9 @@ const HTML_CONTENT = `
       }
     });
 
-    // 4. 点击复制
     outputBox.addEventListener('click', function() {
       var textToCopy = outputBox.value;
-      if (!textToCopy || textToCopy.startsWith('⚠') || textToCopy.startsWith('请') || textToCopy.startsWith('未') || !textToCopy.startsWith('http')) return;
+      if (!textToCopy || textToCopy.startsWith('⚠') || textToCopy.startsWith('未') || !textToCopy.startsWith('http')) return;
 
       try { navigator.clipboard.writeText(textToCopy); } catch (err) { outputBox.select(); document.execCommand('copy'); }
       var originalValue = outputBox.value;
@@ -265,7 +292,6 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // 拦截订阅请求：返回纯文本 Base64 (客户端会自己解码成 YAML)
     if (url.searchParams.has('sub')) {
       const base64Data = url.searchParams.get('sub');
       return new Response(base64Data, {
@@ -273,7 +299,6 @@ export default {
       });
     }
 
-    // 正常访问：返回前端页面
     const domainStr = env.DOMAIN || "";
     if (!domainStr) {
       const errorHtml = HTML_CONTENT.replace('__DOMAINS__', 'ERROR_NO_ENV');
