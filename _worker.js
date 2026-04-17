@@ -87,8 +87,7 @@ const HTML_CONTENT = `
   </style>
 </head>
 <body>
-  <!-- 记得把下面这行 src 换成你真实的图片链接 -->
-  <img src="https://raw.githubusercontent.com/Kauroth/describe/refs/heads/main/pic.png" alt="Full Screen">
+  <img src="https://raw.githubusercontent.com/你的用户名/你的仓库名/main/你的图片路径.jpg" alt="Full Screen">
 
   <div class="glass">
     <div class="glass-mask">
@@ -102,30 +101,116 @@ const HTML_CONTENT = `
   </div>
 
   <script>
-    const inputBox = document.getElementById('input-box');
-    const outputBox = document.getElementById('output-box');
+    var inputBox = document.getElementById('input-box');
+    var outputBox = document.getElementById('output-box');
 
+    // 清洗无效的控制字符（保留正常换行）
+    function cleanStr(str) {
+      return String(str).replace(/[\\x00-\\x09\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
+    }
+
+    // 解析 VLESS
+    function parseVless(line) {
+      line = line.trim();
+      if (!line.startsWith('vless://')) return null;
+      try {
+        var hashIndex = line.lastIndexOf('#');
+        var name = '未命名节点';
+        var mainPart = line;
+        if (hashIndex !== -1) {
+          name = decodeURIComponent(line.substring(hashIndex + 1));
+          mainPart = line.substring(0, hashIndex);
+        }
+        var withoutProtocol = mainPart.substring(8);
+        var atIndex = withoutProtocol.indexOf('@');
+        if (atIndex === -1) return null;
+        var uuid = withoutProtocol.substring(0, atIndex);
+        var addrAndParams = withoutProtocol.substring(atIndex + 1);
+        var queryIndex = addrAndParams.indexOf('?');
+        var address = '';
+        var port = '';
+        var params = {};
+        if (queryIndex !== -1) {
+          var addrPort = addrAndParams.substring(0, queryIndex);
+          var queryString = addrAndParams.substring(queryIndex + 1);
+          var lastColonIndex = addrPort.lastIndexOf(':');
+          if (lastColonIndex !== -1) {
+            address = addrPort.substring(0, lastColonIndex);
+            port = addrPort.substring(lastColonIndex + 1);
+          } else {
+            address = addrPort;
+          }
+          var pairs = queryString.split('&');
+          for (var i = 0; i < pairs.length; i++) {
+            var pair = pairs[i];
+            var eqIndex = pair.indexOf('=');
+            if (eqIndex !== -1) {
+              var key = decodeURIComponent(pair.substring(0, eqIndex));
+              var val = decodeURIComponent(pair.substring(eqIndex + 1));
+              params[key] = val;
+            }
+          }
+        } else {
+          var lci = addrAndParams.lastIndexOf(':');
+          if (lci !== -1) {
+            address = addrAndParams.substring(0, lci);
+            port = addrAndParams.substring(lci + 1);
+          } else {
+            address = addrAndParams;
+          }
+        }
+        return {
+          name: name, address: address, port: port, uuid: uuid,
+          network: params.type || 'tcp', security: params.security || 'none',
+          sni: params.sni || '', host: params.host || '', path: params.path || ''
+        };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // 格式化输出（全部用单引号拼接，避免和外层冲突）
+    function formatNode(node) {
+      var str = '【' + cleanStr(node.name) + '】\\n' +
+                '协议：VLESS\\n' +
+                '地址：' + cleanStr(node.address) + '\\n' +
+                '端口：' + cleanStr(node.port) + '\\n' +
+                'UUID：' + cleanStr(node.uuid) + '\\n' +
+                '传输协议：' + cleanStr(node.network);
+      if (node.path) str += '\\n路径：' + cleanStr(node.path);
+      str += '\\n底层安全：' + cleanStr(node.security);
+      if (node.sni) str += '\\nSNI：' + cleanStr(node.sni);
+      if (node.host && node.host !== node.sni) str += '\\nHost：' + cleanStr(node.host);
+      return str;
+    }
+
+    // 监听输入
     inputBox.addEventListener('input', function() {
-      outputBox.value = this.value;
-      outputBox.placeholder = "点击此处复制内容";
+      var lines = this.value.split('\\n');
+      var result = [];
+      for (var i = 0; i < lines.length; i++) {
+        var node = parseVless(lines[i]);
+        if (node) {
+          result.push(formatNode(node));
+        }
+      }
+      outputBox.value = result.join('\\n\\n--------------------\\n\\n');
     });
 
-    outputBox.addEventListener('click', async function() {
-      const textToCopy = this.value;
+    // 监听复制
+    outputBox.addEventListener('click', function() {
+      var textToCopy = outputBox.value;
       if (!textToCopy) return;
-
       try {
-        await navigator.clipboard.writeText(textToCopy);
+        navigator.clipboard.writeText(textToCopy);
       } catch (err) {
-        this.select();
+        outputBox.select();
         document.execCommand('copy');
       }
-
-      const originalValue = this.value;
-      this.value = "✅ 已复制到剪贴板！";
-
-      setTimeout(() => {
-        this.value = originalValue;
+      var originalValue = outputBox.value;
+      outputBox.value = "✅ 已复制到剪贴板！";
+      setTimeout(function() {
+        outputBox.value = originalValue;
       }, 1500);
     });
   </script>
