@@ -84,12 +84,11 @@ const HTML_CONTENT = `
     #output-box {
       background-color: #f0f2f5;
       cursor: pointer; 
-      color: #d93025; /* 报错时文字变红 */
+      color: #d93025;
     }
   </style>
 </head>
 <body>
-  <!-- 已替换为必应每日壁纸 -->
   <img src="https://bing.img.run/1920x1080.php" alt="Bing Wallpaper">
 
   <div class="glass">
@@ -98,7 +97,7 @@ const HTML_CONTENT = `
       
       <div class="box-container">
         <textarea id="input-box" placeholder="请输入原始 VLESS 节点链接（支持多行批量）..."></textarea>
-        <textarea id="output-box" placeholder="生成的 Base64 订阅链接将在这里显示（点击复制）" readonly></textarea>
+        <textarea id="output-box" placeholder="生成的订阅链接将在这里显示（点击复制）" readonly></textarea>
       </div>
     </div>
   </div>
@@ -109,17 +108,15 @@ const HTML_CONTENT = `
     var inputBox = document.getElementById('input-box');
     var outputBox = document.getElementById('output-box');
 
-    // 精准判断：如果是后端传来的“未拿到变量”标记，直接锁定并报错
     if (DOMAINS_RAW === 'ERROR_NO_ENV') {
       inputBox.disabled = true;
       inputBox.placeholder = '环境变量异常，无法输入';
-      outputBox.value = '⚠️ 环境变量未生效！请检查以下步骤：\\n\\n1. 确认在 Pages 项目的【设置 -> 环境变量】中添加了变量名 DOMAIN\\n2. 变量类型选择【纯文本(文本)】，值填入你的域名(逗号隔开)\\n3. 最重要：保存后，必须去【部署】页面，点击最新部署右侧的【重试部署】！';
+      outputBox.value = '⚠️ 环境变量未生效！请检查 Pages【设置 -> 环境变量】是否添加了 DOMAIN，并务必【重试部署】！';
     } else if (DOMAINS_RAW && DOMAINS_RAW !== '__DOMAINS__') {
-      // 正常解析域名列表
       domainList = DOMAINS_RAW.split(',').map(function(d) { return d.trim(); }).filter(function(d) { return d.length > 0; });
-      outputBox.style.color = '#333'; // 恢复正常文字颜色
+      outputBox.style.color = '#333'; 
     } else {
-      outputBox.value = '请在 Cloudflare Pages 环境变量中配置 DOMAIN';
+      outputBox.value = '请在环境变量中配置 DOMAIN';
     }
 
     inputBox.addEventListener('input', function() {
@@ -185,15 +182,22 @@ const HTML_CONTENT = `
         var encodedStr = encodeURIComponent(finalStr).replace(/%([0-9A-F]{2})/g, function(match, p1) {
           return String.fromCharCode('0x' + p1);
         });
-        outputBox.value = btoa(encodedStr);
+        var base64Str = btoa(encodedStr);
+        
+        // 👇 核心改变：拼接成当前页面的 URL 链接
+        var currentUrl = window.location.origin + window.location.pathname;
+        var subUrl = currentUrl + '?sub=' + encodeURIComponent(base64Str);
+        
+        outputBox.value = subUrl;
       } catch (e) {
-        outputBox.value = 'Base64 编码失败';
+        outputBox.value = '生成订阅链接失败';
       }
     });
 
     outputBox.addEventListener('click', function() {
       var textToCopy = outputBox.value;
-      if (!textToCopy || textToCopy.startsWith('⚠') || textToCopy.startsWith('请') || textToCopy.startsWith('未')) return;
+      // 只有看起来像 URL 的时候才允许复制
+      if (!textToCopy || textToCopy.startsWith('⚠') || textToCopy.startsWith('请') || textToCopy.startsWith('未') || !textToCopy.startsWith('http')) return;
 
       try {
         navigator.clipboard.writeText(textToCopy);
@@ -202,7 +206,7 @@ const HTML_CONTENT = `
         document.execCommand('copy');
       }
       var originalValue = outputBox.value;
-      outputBox.value = "✅ 已复制 Base64 到剪贴板！";
+      outputBox.value = "✅ 订阅链接已复制！可粘贴到客户端";
       setTimeout(function() {
         outputBox.value = originalValue;
       }, 1500);
@@ -214,9 +218,26 @@ const HTML_CONTENT = `
 
 export default {
   async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // ==========================================
+    // 拦截订阅请求：如果 URL 里带有 ?sub= 参数
+    // ==========================================
+    if (url.searchParams.has('sub')) {
+      const base64Data = url.searchParams.get('sub');
+      // 直接返回纯文本的 Base64，不包裹任何 HTML
+      return new Response(base64Data, {
+        headers: {
+          "content-type": "text/plain;charset=UTF-8"
+        }
+      });
+    }
+
+    // ==========================================
+    // 正常访问：返回前端 HTML 页面
+    // ==========================================
     const domainStr = env.DOMAIN || "";
 
-    // 如果环境变量为空，把特定的错误标记传给前端
     if (!domainStr) {
       const errorHtml = HTML_CONTENT.replace('__DOMAINS__', 'ERROR_NO_ENV');
       return new Response(errorHtml, {
@@ -224,7 +245,6 @@ export default {
       });
     }
 
-    // 正常情况：转义单引号防止 JS 语法报错，然后替换
     const safeDomainStr = domainStr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     const finalHtml = HTML_CONTENT.replace('__DOMAINS__', safeDomainStr);
 
