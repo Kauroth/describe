@@ -97,7 +97,7 @@ const HTML_CONTENT = `
       
       <div class="box-container">
         <textarea id="input-box" placeholder="支持粘贴 vless:// 链接 或 Base64 订阅内容..."></textarea>
-        <textarea id="output-box" placeholder="生成的 Clash 订阅链接将在这里显示（点击复制）" readonly></textarea>
+        <textarea id="output-box" placeholder="生成的通用订阅链接将在这里显示（点击复制）" readonly></textarea>
       </div>
     </div>
   </div>
@@ -117,115 +117,19 @@ const HTML_CONTENT = `
       outputBox.style.color = '#333'; 
     }
 
-    // 清除不可见控制字符
     function cleanStr(str) {
       return String(str).replace(/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
     }
 
-    // 安全解码 Base64（兼容中文 UTF-8）
     function decodeBase64(str) {
       try {
         var binary = atob(str);
         var bytes = new Uint8Array(binary.length);
-        for (var i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
+        for (var i = 0; i < binary.length; i++) { bytes[i] = binary.charCodeAt(i); }
         return new TextDecoder('utf-8').decode(bytes);
-      } catch (e) {
-        return null;
-      }
-    }
-
-    // 解析 VLESS
-    function parseVless(line) {
-      line = line.trim();
-      if (!line.startsWith('vless://')) return null;
-      try {
-        var hashIndex = line.lastIndexOf('#');
-        var name = '未命名节点';
-        var mainPart = line;
-        if (hashIndex !== -1) {
-          name = decodeURIComponent(line.substring(hashIndex + 1));
-          mainPart = line.substring(0, hashIndex);
-        }
-        var withoutProtocol = mainPart.substring(8);
-        var atIndex = withoutProtocol.indexOf('@');
-        if (atIndex === -1) return null;
-        var uuid = withoutProtocol.substring(0, atIndex);
-        var addrAndParams = withoutProtocol.substring(atIndex + 1);
-        var queryIndex = addrAndParams.indexOf('?');
-        var address = '', port = '', params = {};
-        if (queryIndex !== -1) {
-          var addrPort = addrAndParams.substring(0, queryIndex);
-          var queryString = addrAndParams.substring(queryIndex + 1);
-          var lastColonIndex = addrPort.lastIndexOf(':');
-          if (lastColonIndex !== -1) { address = addrPort.substring(0, lastColonIndex); port = addrPort.substring(lastColonIndex + 1); }
-          else { address = addrPort; }
-          var pairs = queryString.split('&');
-          for (var i = 0; i < pairs.length; i++) {
-            var eqIndex = pairs[i].indexOf('=');
-            if (eqIndex !== -1) { params[decodeURIComponent(pairs[i].substring(0, eqIndex))] = decodeURIComponent(pairs[i].substring(eqIndex + 1)); }
-          }
-        } else {
-          var lci = addrAndParams.lastIndexOf(':');
-          if (lci !== -1) { address = addrAndParams.substring(0, lci); port = addrAndParams.substring(lci + 1); }
-          else { address = addrAndParams; }
-        }
-        return { name, address, port, uuid, params };
       } catch (e) { return null; }
     }
 
-    // 生成 Clash YAML
-    function buildClashYaml(node, newAddress) {
-      var p = node.params;
-      var type = (p.type || 'tcp').toLowerCase();
-      if (type === 'splithttp') type = 'xhttp';
-      
-      // 转义节点名里的双引号，防止破坏 YAML 结构
-      var safeName = node.name.replace(/"/g, '\\"');
-
-      var yaml = '  - name: "' + safeName + '_' + newAddress + '"\\n';
-      yaml += '    type: vless\\n';
-      yaml += '    server: ' + newAddress + '\\n';
-      yaml += '    port: ' + node.port + '\\n';
-      yaml += '    uuid: ' + node.uuid + '\\n';
-      
-      if (p.flow) yaml += '    flow: ' + p.flow + '\\n';
-      yaml += '    network: ' + type + '\\n';
-      yaml += '    tls: ' + (p.security === 'tls' || p.security === 'reality') + '\\n';
-      yaml += '    udp: true\\n';
-      
-      if (p.sni) yaml += '    servername: ' + p.sni + '\\n';
-      if (p.fp) yaml += '    client-fingerprint: ' + p.fp + '\\n';
-
-      if (p.security === 'reality') {
-        yaml += '    reality-opts:\\n';
-        if (p.pbk) yaml += '      public-key: ' + p.pbk + '\\n';
-        if (p.sid) yaml += '      short-id: ' + p.sid + '\\n';
-      }
-
-      if (type === 'xhttp') {
-        yaml += '    xhttp-opts:\\n';
-        yaml += '      path: "' + (p.path || '/') + '"\\n';
-        yaml += '      mode: "' + (p.mode || 'auto') + '"\\n';
-        if (p.host) yaml += '      host: ' + p.host + '\\n';
-      } else if (type === 'ws') {
-        yaml += '    ws-opts:\\n';
-        yaml += '      path: "' + (p.path || '/') + '"\\n';
-        if (p.host) yaml += '      headers:\\n        Host: ' + p.host + '\\n';
-      } else if (type === 'grpc') {
-        yaml += '    grpc-opts:\\n';
-        if (p.serviceName) yaml += '      grpc-service-name: "' + p.serviceName + '"\\n';
-      } else if (type === 'h2') {
-        yaml += '    h2-opts:\\n';
-        yaml += '      path: "' + (p.path || '/') + '"\\n';
-        if (p.host) yaml += '      host:\\n        - ' + p.host + '\\n';
-      }
-      
-      return yaml;
-    }
-
-    // 监听输入
     inputBox.addEventListener('input', function() {
       if (domainList.length === 0) return;
       var rawInput = cleanStr(this.value.trim());
@@ -241,28 +145,59 @@ const HTML_CONTENT = `
         }
       }
 
-      // 兼容不同系统的换行符进行分割
       var lines = actualText.split(/\\r?\\n/);
-      var yamlProxies = '';
+      var newLinks = [];
 
       for (var i = 0; i < lines.length; i++) {
-        var node = parseVless(lines[i]);
-        if (!node) continue;
+        var line = lines[i].trim();
+        if (!line.startsWith('vless://')) continue;
 
+        var hashIndex = line.lastIndexOf('#');
+        var name = '';
+        var mainPart = line;
+        if (hashIndex !== -1) {
+          name = line.substring(hashIndex); 
+          mainPart = line.substring(0, hashIndex);
+        }
+
+        var atIndex = mainPart.indexOf('@');
+        if (atIndex === -1) continue;
+        
+        var prefix = mainPart.substring(0, atIndex + 1); 
+        var suffix = mainPart.substring(atIndex + 1);     
+
+        var addrEndIndex = -1;
+        var colonIndex = suffix.indexOf(':');
+        var questionIndex = suffix.indexOf('?');
+
+        if (colonIndex !== -1) {
+          addrEndIndex = colonIndex; 
+        } else if (questionIndex !== -1) {
+          addrEndIndex = questionIndex; 
+        } else {
+          addrEndIndex = suffix.length; 
+        }
+
+        if (addrEndIndex <= 0) continue;
+        var restSuffix = suffix.substring(addrEndIndex); 
+
+        // 遍历优选域名，直接拼接全新的 VLESS 链接
         for (var j = 0; j < domainList.length; j++) {
-          yamlProxies += buildClashYaml(node, domainList[j]) + '\\n';
+          var newLink = prefix + domainList[j] + restSuffix + name;
+          newLinks.push(newLink);
         }
       }
 
-      if (!yamlProxies) {
-        outputBox.value = '未检测到有效的 VLESS 链接（请确认输入的是 VLESS 节点或 Base64）';
+      if (newLinks.length === 0) {
+        outputBox.value = '未检测到有效的 VLESS 链接';
         return;
       }
 
-      var finalYaml = 'proxies:\\n' + yamlProxies;
+      // 用换行符拼合
+      var finalStr = newLinks.join('\\n');
 
       try {
-        var encodedStr = encodeURIComponent(finalYaml).replace(/%([0-9A-F]{2})/g, function(match, p1) {
+        var encodedStr = encodeURIComponent(finalStr).replace(/%([0-9A-F]{2})/g, function(match, p1) {
           return String.fromCharCode('0x' + p1);
         });
         var base64Str = btoa(encodedStr);
@@ -280,7 +215,7 @@ const HTML_CONTENT = `
 
       try { navigator.clipboard.writeText(textToCopy); } catch (err) { outputBox.select(); document.execCommand('copy'); }
       var originalValue = outputBox.value;
-      outputBox.value = "✅ Clash 订阅链接已复制！";
+      outputBox.value = "✅ 通用订阅链接已复制！";
       setTimeout(function() { outputBox.value = originalValue; }, 1500);
     });
   </script>
@@ -292,6 +227,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // 拦截订阅请求：直接吐出纯净 Base64 (里面包含原汁原味的 vless:// 链接)
     if (url.searchParams.has('sub')) {
       const base64Data = url.searchParams.get('sub');
       return new Response(base64Data, {
@@ -299,6 +235,7 @@ export default {
       });
     }
 
+    // 正常访问：返回前端页面
     const domainStr = env.DOMAIN || "";
     if (!domainStr) {
       const errorHtml = HTML_CONTENT.replace('__DOMAINS__', 'ERROR_NO_ENV');
