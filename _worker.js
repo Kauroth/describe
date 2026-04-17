@@ -71,10 +71,11 @@ const HTML_CONTENT = `
       border-radius: 8px;
       padding: 15px;
       font-size: 16px;
-      font-family: "Microsoft YaHei", sans-serif;
+      font-family: "Consolas", "Microsoft YaHei", monospace;
       box-sizing: border-box;
       outline: none;
       background-color: #f9fafb;
+      word-break: break-all;
     }
     textarea:focus {
       border-color: #1a6dff;
@@ -87,120 +88,115 @@ const HTML_CONTENT = `
   </style>
 </head>
 <body>
-  <img src="https://raw.githubusercontent.com/Kauroth/describe/refs/heads/main/pic.png" alt="Full Screen">
+  <img src="https://bing.img.run/rand_uhd.php" alt="Full Screen">
 
   <div class="glass">
     <div class="glass-mask">
       <div class="glass-title">订阅转换</div>
       
       <div class="box-container">
-        <textarea id="input-box" placeholder="请输入原始订阅链接..."></textarea>
-        <textarea id="output-box" placeholder="点击此处复制内容" readonly></textarea>
+        <textarea id="input-box" placeholder="请输入原始 VLESS 节点链接（支持多行批量）..."></textarea>
+        <textarea id="output-box" placeholder="生成的 Base64 订阅链接将在这里显示（点击复制）" readonly></textarea>
       </div>
     </div>
   </div>
 
   <script>
+    // 注意：这里的 __DOMAINS__ 会被后端 Worker 替换为真实的域名
+    var DOMAINS_RAW = '__DOMAINS__';
+    var domainList = [];
+
+    if (DOMAINS_RAW && DOMAINS_RAW !== '__DOMAINS__') {
+      domainList = DOMAINS_RAW.split(',').map(function(d) { return d.trim(); }).filter(function(d) { return d.length > 0; });
+    }
+
     var inputBox = document.getElementById('input-box');
     var outputBox = document.getElementById('output-box');
 
-    // 清洗无效的控制字符（保留正常换行）
-    function cleanStr(str) {
-      return String(str).replace(/[\\x00-\\x09\\x0B\\x0C\\x0E-\\x1F\\x7F]/g, '');
-    }
+    inputBox.addEventListener('input', function() {
+      var inputText = this.value.trim();
 
-    // 解析 VLESS
-    function parseVless(line) {
-      line = line.trim();
-      if (!line.startsWith('vless://')) return null;
-      try {
+      if (domainList.length === 0) {
+        outputBox.value = '请在 Cloudflare Workers 环境变量中配置 DOMAIN';
+        return;
+      }
+
+      if (!inputText) {
+        outputBox.value = '';
+        return;
+      }
+
+      var lines = inputText.split('\\n');
+      var newLinks = [];
+
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (!line.startsWith('vless://')) continue;
+
+        // 分离节点名称 (# 后面的部分)
         var hashIndex = line.lastIndexOf('#');
-        var name = '未命名节点';
+        var name = '';
         var mainPart = line;
         if (hashIndex !== -1) {
-          name = decodeURIComponent(line.substring(hashIndex + 1));
+          name = line.substring(hashIndex); // 包含 '#'
           mainPart = line.substring(0, hashIndex);
         }
-        var withoutProtocol = mainPart.substring(8);
-        var atIndex = withoutProtocol.indexOf('@');
-        if (atIndex === -1) return null;
-        var uuid = withoutProtocol.substring(0, atIndex);
-        var addrAndParams = withoutProtocol.substring(atIndex + 1);
-        var queryIndex = addrAndParams.indexOf('?');
-        var address = '';
-        var port = '';
-        var params = {};
-        if (queryIndex !== -1) {
-          var addrPort = addrAndParams.substring(0, queryIndex);
-          var queryString = addrAndParams.substring(queryIndex + 1);
-          var lastColonIndex = addrPort.lastIndexOf(':');
-          if (lastColonIndex !== -1) {
-            address = addrPort.substring(0, lastColonIndex);
-            port = addrPort.substring(lastColonIndex + 1);
-          } else {
-            address = addrPort;
-          }
-          var pairs = queryString.split('&');
-          for (var i = 0; i < pairs.length; i++) {
-            var pair = pairs[i];
-            var eqIndex = pair.indexOf('=');
-            if (eqIndex !== -1) {
-              var key = decodeURIComponent(pair.substring(0, eqIndex));
-              var val = decodeURIComponent(pair.substring(eqIndex + 1));
-              params[key] = val;
-            }
-          }
+
+        // 找到 @ 符号，分离 UUID 和 地址端口参数
+        var atIndex = mainPart.indexOf('@');
+        if (atIndex === -1) continue;
+        
+        var prefix = mainPart.substring(0, atIndex + 1); // "vless://uuid@"
+        var suffix = mainPart.substring(atIndex + 1);     // "ip:port?params"
+
+        // 找到地址结束的位置（遇到冒号端口 或 问号参数 即结束）
+        var addrEndIndex = -1;
+        var colonIndex = suffix.indexOf(':');
+        var questionIndex = suffix.indexOf('?');
+
+        if (colonIndex !== -1) {
+          addrEndIndex = colonIndex; // 有端口，地址在冒号前结束
+        } else if (questionIndex !== -1) {
+          addrEndIndex = questionIndex; // 无端口有参数，地址在问号前结束
         } else {
-          var lci = addrAndParams.lastIndexOf(':');
-          if (lci !== -1) {
-            address = addrAndParams.substring(0, lci);
-            port = addrAndParams.substring(lci + 1);
-          } else {
-            address = addrAndParams;
-          }
+          addrEndIndex = suffix.length; // 都没有，整个后缀就是地址
         }
-        return {
-          name: name, address: address, port: port, uuid: uuid,
-          network: params.type || 'tcp', security: params.security || 'none',
-          sni: params.sni || '', host: params.host || '', path: params.path || ''
-        };
+
+        if (addrEndIndex <= 0) continue;
+
+        var restSuffix = suffix.substring(addrEndIndex); // ":port?params" 或 "?params" 或 ""
+
+        // 将预设的每一个域名替换进去，生成新链接
+        for (var j = 0; j < domainList.length; j++) {
+          var newLink = prefix + domainList[j] + restSuffix + name;
+          newLinks.push(newLink);
+        }
+      }
+
+      if (newLinks.length === 0) {
+        outputBox.value = '未检测到有效的 VLESS 链接';
+        return;
+      }
+
+      // 多条链接用换行符拼接
+      var finalStr = newLinks.join('\\n');
+
+      // 转换为 Base64（处理中文节点名的 UTF-8 编码问题）
+      try {
+        var encodedStr = encodeURIComponent(finalStr).replace(/%([0-9A-F]{2})/g, function(match, p1) {
+          return String.fromCharCode('0x' + p1);
+        });
+        outputBox.value = btoa(encodedStr);
       } catch (e) {
-        return null;
+        outputBox.value = 'Base64 编码失败';
       }
-    }
-
-    // 格式化输出（全部用单引号拼接，避免和外层冲突）
-    function formatNode(node) {
-      var str = '【' + cleanStr(node.name) + '】\\n' +
-                '协议：VLESS\\n' +
-                '地址：' + cleanStr(node.address) + '\\n' +
-                '端口：' + cleanStr(node.port) + '\\n' +
-                'UUID：' + cleanStr(node.uuid) + '\\n' +
-                '传输协议：' + cleanStr(node.network);
-      if (node.path) str += '\\n路径：' + cleanStr(node.path);
-      str += '\\n底层安全：' + cleanStr(node.security);
-      if (node.sni) str += '\\nSNI：' + cleanStr(node.sni);
-      if (node.host && node.host !== node.sni) str += '\\nHost：' + cleanStr(node.host);
-      return str;
-    }
-
-    // 监听输入
-    inputBox.addEventListener('input', function() {
-      var lines = this.value.split('\\n');
-      var result = [];
-      for (var i = 0; i < lines.length; i++) {
-        var node = parseVless(lines[i]);
-        if (node) {
-          result.push(formatNode(node));
-        }
-      }
-      outputBox.value = result.join('\\n\\n--------------------\\n\\n');
     });
 
-    // 监听复制
+    // 点击输出框复制
     outputBox.addEventListener('click', function() {
       var textToCopy = outputBox.value;
-      if (!textToCopy) return;
+      if (!textToCopy || textToCopy.startsWith('请') || textToCopy.startsWith('未')) return;
+
       try {
         navigator.clipboard.writeText(textToCopy);
       } catch (err) {
@@ -208,7 +204,7 @@ const HTML_CONTENT = `
         document.execCommand('copy');
       }
       var originalValue = outputBox.value;
-      outputBox.value = "✅ 已复制到剪贴板！";
+      outputBox.value = "✅ 已复制 Base64 到剪贴板！";
       setTimeout(function() {
         outputBox.value = originalValue;
       }, 1500);
@@ -220,7 +216,16 @@ const HTML_CONTENT = `
 
 export default {
   async fetch(request, env, ctx) {
-    return new Response(HTML_CONTENT, {
+    // 1. 从 Cloudflare 环境变量获取 DOMAIN
+    const domainStr = env.DOMAIN || "";
+
+    // 2. 转义单引号，防止破坏前端 JS 语法
+    const safeDomainStr = domainStr.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
+    // 3. 将占位符替换为真实域名
+    const finalHtml = HTML_CONTENT.replace('__DOMAINS__', safeDomainStr);
+
+    return new Response(finalHtml, {
       headers: { "content-type": "text/html;charset=UTF-8" }
     });
   }
