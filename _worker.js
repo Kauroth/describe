@@ -87,7 +87,7 @@ const HTML_CONTENT = `
   </style>
 </head>
 <body>
-  <img src="https://raw.githubusercontent.com/你的用户名/你的仓库名/main/你的图片路径.jpg" alt="Full Screen">
+  <img src="https://raw.githubusercontent.com/Kauroth/describe/refs/heads/main/pic.png" alt="Full Screen">
 
   <div class="glass">
     <div class="glass-mask">
