@@ -47,6 +47,39 @@ export const getHtml = () => `
         font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
         letter-spacing: 4px;
       }
+
+      /* 👇 包裹两个文本框的容器 */
+      .box-container {
+      width: 90%;             /* 容器宽度占遮罩的90% */
+      flex-grow: 1;           /* 自动占满标题下方的所有剩余高度 */
+      display: flex;
+      flex-direction: column; /* 上下两个文本框排列 */
+      gap: 15px;              /* 两个文本框之间的间距 */
+      padding-bottom: 5%;     /* 底部留点边距 */
+    }
+    /* 👇 文本框通用样式 */
+      textarea {
+      width: 100%;
+      flex-grow: 1;           /* 上下文本框平分高度 */
+      resize: none;           /* 禁止手动拖拽改变大小 */
+      border: 1px solid #d0d5dd;
+      border-radius: 8px;
+      padding: 15px;
+      font-size: 16px;
+      font-family: "Microsoft YaHei", sans-serif;
+      box-sizing: border-box;
+      outline: none;
+      background-color: #f9fafb;
+    }
+      textarea:focus {
+      border-color: #1a6dff;  /* 输入焦点时边框变蓝色 */
+      background-color: #fff;
+    }
+    /* 输出框因为是只读，背景稍微灰一点区分 */
+    #output-box {
+      background-color: #f0f2f5;
+      cursor: default;
+    }
     </style>
   </head>
   <body>
@@ -54,6 +87,12 @@ export const getHtml = () => `
     <div class="glass">
       <div class="glass-mask">
         <div class="glass-title">订阅转换</div>
+        <div class="box-container">
+          <textarea id="input-box" placeholder="请输入订阅链接"></textarea>
+          <textarea id="output-box" readonly placeholder="转换结果"></textarea>
+        </div>
+      </div>
+    </div>
   </body>
   </html>
 `;
