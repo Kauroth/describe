@@ -116,14 +116,17 @@ const HTML_CONTENT = `
 
       try {
         await navigator.clipboard.writeText(textToCopy);
-        this.placeholder = "✅ 已复制到剪贴板！";
-        setTimeout(() => { this.placeholder = "点击此处复制内容"; }, 1500);
       } catch (err) {
         this.select();
         document.execCommand('copy');
-        this.placeholder = "✅ 已复制到剪贴板！";
-        setTimeout(() => { this.placeholder = "点击此处复制内容"; }, 1500);
       }
+
+      const originalValue = this.value;
+      this.value = "✅ 已复制到剪贴板！";
+
+      setTimeout(() => {
+        this.value = originalValue;
+      }, 1500);
     });
   </script>
 </body>
