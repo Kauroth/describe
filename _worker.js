@@ -5,22 +5,23 @@ export default {
     const url = new URL(request.url);
     const addrStr = env.ADDR;
 
-    // 判断是否触发订阅模式 (访问时加上 ?format=base64 或 ?subscribe=1)
+    // 判断是否为订阅模式
     const isSubscribeMode = url.searchParams.get('format') === 'base64' || url.searchParams.has('subscribe');
 
     if (!addrStr) {
       return new Response("错误：请先配置环境变量 ADDR。", { status: 500 });
     }
 
-    // 解析多个地址
-    const addresses = addrStr.split(',').map(addr => addr.trim()).filter(addr => addr.length > 0);
+    // 1. 解析 ADDR 中的多个网址
+    const addresses = addrStr.split(',')
+      .map(addr => addr.trim())
+      .filter(addr => addr.length > 0);
+
     if (addresses.length === 0) {
-      return new Response("错误：ADDR 变量中没有有效的地址。", { status: 400 });
+      return new Response("错误：ADDR 中没有有效的网址。", { status: 400 });
     }
 
-    // ==========================================
-    // 核心逻辑：并发请求所有地址
-    // ==========================================
+    // 2. 并发请求所有网址，获取文本内容
     const fetchPromises = addresses.map(async (targetUrl) => {
       try {
         const response = await fetch(targetUrl);
@@ -35,42 +36,62 @@ export default {
     const results = await Promise.all(fetchPromises);
 
     // ==========================================
-    // 分支 1：订阅模式 (返回 Base64 编码)
+    // 分支 1：订阅模式 (精准提取 IP#备注 并 Base64 编码)
     // ==========================================
     if (isSubscribeMode) {
-      // 将结果打包为结构化 JSON
-      const payload = JSON.stringify({
-        update_time: new Date().toISOString(),
-        count: results.length,
-        data: results.map(r => ({
-          url: r.url,
-          status: r.status,
-          content: r.content
-        }))
-      }, null, 0); // 压缩 JSON，减少体积
+      // 把所有网址返回的文本合并
+      const allText = results.map(r => r.content).join('\n');
 
-      // 处理中文等非 Latin1 字符，防止 btoa 报错，然后转为 Base64
-      const base64Str = btoa(unescape(encodeURIComponent(payload)));
+      // 正则定义
+      const ipV4Regex = /(?:(?:25[0-5]|2[0-4]\d|1?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|1?\d{1,2})/;
+      const ipV6Regex = /(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}/;
+
+      const validLines = [];
+      const lines = allText.split('\n');
+
+      // 逐行解析提取
+      for (const line of lines) {
+        const hashIndex = line.indexOf('#');
+        if (hashIndex !== -1) {
+          const possibleIp = line.substring(0, hashIndex).trim();
+          const remark = line.substring(hashIndex + 1).trim();
+
+          // 判断 # 前面的内容是否为合法的 IPv4 或 IPv6
+          if (ipV4Regex.test(possibleIp) || ipV6Regex.test(possibleIp)) {
+            // 格式化为 "IP 备注" (用空格替代 #)
+            validLines.push(`${possibleIp} ${remark}`);
+          }
+        }
+      }
+
+      // 用换行符拼接最终纯文本
+      const plainText = validLines.join('\n');
+
+      if (plainText === "") {
+        return new Response("", { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+      }
+
+      // 转义并转为 Base64
+      const base64Str = btoa(unescape(encodeURIComponent(plainText)));
 
       return new Response(base64Str, {
         status: 200,
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
-          // 建议关闭缓存，保证每次拉取都是最新内容
           "Cache-Control": "no-cache, no-store, must-revalidate"
         },
       });
     }
 
     // ==========================================
-    // 分支 2：普通模式 (返回可视化 HTML 页面)
+    // 分支 2：普通模式 (可视化网页展示)
     // ==========================================
     const subscribeLink = `${url.origin}${url.pathname}?format=base64`;
 
     const htmlParts = results.map((result, index) => {
       const header = `
         <div style="background:#f8f9fa;padding:10px 15px;border-bottom:1px solid #dee2e6;display:flex;justify-content:space-between;flex-wrap:wrap;align-items:center;">
-          <strong>地址 ${index + 1}：</strong>
+          <strong>源 ${index + 1}：</strong>
           <a href="${result.url}" target="_blank" style="color:#0066cc;word-break:break-all;">${result.url}</a>
           <span style="color:${result.success ? '#28a745' : '#dc3545'}; white-space:nowrap; margin-left:10px;">
             状态码: ${result.status}
@@ -94,22 +115,22 @@ export default {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>多地址内容解析</title>
+        <title>多源内容解析</title>
         <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #e9ecef; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8f9fa; margin: 0; padding: 30px 15px; }
           .container { max-width: 1200px; margin: 0 auto; }
           h2 { color: #343a40; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
-          .sub-box { background: #fff; padding: 15px; border-radius: 5px; border: 1px dashed #007bff; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;}
-          .sub-box a { color: #007bff; font-weight: bold; text-decoration: none; word-break: break-all;}
+          .sub-box { background: #fff; padding: 15px; border-radius: 5px; margin-bottom: 25px; border-left: 4px solid #28a745; box-shadow: 0 2px 5px rgba(0,0,0,0.05); word-break: break-all;}
+          .sub-box a { color: #28a745; font-weight: bold; text-decoration: none;}
           .sub-box a:hover { text-decoration: underline;}
         </style>
       </head>
       <body>
         <div class="container">
-          <h2>共解析 ${results.length} 个地址</h2>
+          <h2>数据源解析 (共 ${results.length} 个)</h2>
           <div class="sub-box">
-            <span>📥 <strong>Base64 订阅链接：</strong>可用于 RSS 阅读器、Telegram Bot 或脚本定时拉取。</span>
-            <a href="${subscribeLink}" target="_blank">${subscribeLink}</a>
+            <span>📥 <strong>提取 IP 订阅链接：</strong>自动从下方内容中提取 IPv4/IPv6 与备注，输出 Base64。</span>
+            <br><a href="${subscribeLink}" target="_blank">${subscribeLink}</a>
           </div>
           ${htmlParts}
         </div>
@@ -122,7 +143,7 @@ export default {
   },
 };
 
-// 辅助函数：转义 HTML 特殊字符
+// 辅助函数：防止 XSS
 function escapeHtml(text) {
   return text.replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
