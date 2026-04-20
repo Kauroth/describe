@@ -3,105 +3,110 @@ export default {
   async fetch(request) {
     const url = new URL(request.url);
 
-    // API：解析链接获取地址
     if (url.pathname === '/api/resolve' && request.method === 'POST') {
       return handleResolve(request);
     }
 
-    // API：转换 VLESS 节点
     if (url.pathname === '/api/convert' && request.method === 'POST') {
       return handleConvert(request);
     }
 
-    // 默认返回前端页面
     return new Response(renderHTML(), {
       headers: { 'Content-Type': 'text/html; charset=utf-8' }
     });
   }
 };
 
-// 从用户提供的链接中提取 IP/域名
 async function handleResolve(request) {
   try {
     const { link } = await request.json();
-    if (!link) {
-      return jsonResponse({ error: '请提供链接' }, 400);
-    }
+    if (!link) return jsonResponse({ error: '请提供链接' }, 400);
 
     const resp = await fetch(link, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      signal: AbortSignal.timeout(10000)
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(15000)
     });
-
     const text = await resp.text();
 
-    // 优先匹配 IPv4
-    const ipv4Regex = /\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/g;
-    const ipv4Matches = [...text.matchAll(ipv4Regex)]
-      .map(m => m[1])
-      .filter(ip => {
-        const parts = ip.split('.').map(Number);
-        return parts.every(p => p >= 0 && p <= 255) &&
-          !(parts[0] === 0) &&
-          !(parts[0] === 127) &&
-          !(parts[0] === 10) &&
-          !(parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) &&
-          !(parts[0] === 192 && parts[1] === 168);
-      });
+    // IPv4（排除内网和特殊地址）
+    const ipv4Re = /\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/g;
+    const ipv4 = [...text.matchAll(ipv4Re)].map(m => m[1]).filter(ip => {
+      const p = ip.split('.').map(Number);
+      return p.every(v => v >= 0 && v <= 255) &&
+        p[0] !== 0 && p[0] !== 127 &&
+        !(p[0] === 10) &&
+        !(p[0] === 172 && p[1] >= 16 && p[1] <= 31) &&
+        !(p[0] === 192 && p[1] === 168);
+    });
+    if (ipv4.length > 0) return jsonResponse({ addresses: [...new Set(ipv4)], source: 'IPv4' });
 
-    if (ipv4Matches.length > 0) {
-      return jsonResponse({ addresses: [...new Set(ipv4Matches)], source: 'IPv4' });
-    }
+    // IPv6
+    const ipv6Re = /\b([0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){7})\b/g;
+    const ipv6 = [...text.matchAll(ipv6Re)].map(m => m[1]);
+    if (ipv6.length > 0) return jsonResponse({ addresses: [...new Set(ipv6)], source: 'IPv6' });
 
-    // 尝试匹配 IPv6（简化匹配）
-    const ipv6Regex = /\b([0-9a-fA-F]{1,4}(:[0-9a-fA-F]{1,4}){7})\b/g;
-    const ipv6Matches = [...text.matchAll(ipv6Regex)].map(m => m[1]);
-    if (ipv6Matches.length > 0) {
-      return jsonResponse({ addresses: [...new Set(ipv6Matches)], source: 'IPv6' });
-    }
+    // 域名
+    const skip = ['google.com', 'cloudflare.com', 'mozilla.org', 'github.com', 'w3.org',
+      'jquery.com', 'example.com', 'apache.org', 'nginx.org', 'schema.org', 'json.org',
+      'python.org', 'microsoft.com', 'apple.com', 'amazon.com', 'facebook.com', 'twitter.com',
+      'youtube.com', 'googleapis.com', 'gstatic.com', 'google-analytics.com', 'doubleclick.net'];
+    const domRe = /\b([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.([a-zA-Z]{2,}))\b/g;
+    const doms = [...text.matchAll(domRe)].map(m => m[1].toLowerCase())
+      .filter(d => !skip.some(s => d === s || d.endsWith('.' + s)));
+    if (doms.length > 0) return jsonResponse({ addresses: [...new Set(doms)], source: '域名' });
 
-    // 尝试匹配域名（排除常见无关节点）
-    const domainRegex = /\b([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.([a-zA-Z]{2,}))\b/g;
-    const excludeDomains = ['google.com', 'cloudflare.com', 'mozilla.org', 'github.com',
-      'w3.org', 'jquery.com', 'example.com', 'apache.org', 'nginx.org',
-      'schema.org', 'json.org', 'xml.org', 'python.org', 'microsoft.com',
-      'apple.com', 'amazon.com', 'facebook.com', 'twitter.com', 'youtube.com'];
-    const domainMatches = [...text.matchAll(domainRegex)]
-      .map(m => m[1].toLowerCase())
-      .filter(d => !excludeDomains.some(ex => d === ex || d.endsWith('.' + ex)));
-
-    if (domainMatches.length > 0) {
-      return jsonResponse({ addresses: [...new Set(domainMatches)], source: '域名' });
-    }
-
-    // 如果都没匹配到，返回原始文本的前500字符供用户参考
-    return jsonResponse({ error: '未能从链接中提取到有效地址', preview: text.slice(0, 500) }, 400);
-
+    return jsonResponse({ error: '未能提取到有效地址', preview: text.slice(0, 500) }, 400);
   } catch (err) {
     return jsonResponse({ error: '请求失败: ' + err.message }, 500);
   }
 }
 
-// 替换 VLESS 节点地址并转 base64
 async function handleConvert(request) {
   try {
-    const { vless, newAddress } = await request.json();
-    if (!vless || !newAddress) {
-      return jsonResponse({ error: '请提供 VLESS 节点和目标地址' }, 400);
+    const { input, newAddress } = await request.json();
+    if (!input || !newAddress) return jsonResponse({ error: '缺少参数' }, 400);
+
+    // 解析输入：尝试 base64 解码，逐行提取 vless://
+    let lines;
+    try {
+      const decoded = atob(input.trim());
+      lines = decoded.split(/[\n\r]+/);
+    } catch {
+      lines = input.split(/[\n\r]+/);
     }
 
-    const result = replaceVlessAddress(vless, newAddress);
-    if (!result) {
-      return jsonResponse({ error: 'VLESS 节点格式无效' }, 400);
+    const vlessList = lines
+      .map(l => l.trim())
+      .filter(l => l.startsWith('vless://'));
+
+    if (vlessList.length === 0) {
+      return jsonResponse({ error: '未找到有效的 VLESS 节点（需以 vless:// 开头）' }, 400);
     }
 
-    // 转 base64
-    const base64 = btoa(result);
+    const converted = [];
+    const failed = [];
+
+    vlessList.forEach((raw, idx) => {
+      try {
+        const result = replaceVlessAddress(raw, newAddress);
+        if (result) {
+          converted.push(result);
+        } else {
+          failed.push({ line: idx + 1, reason: '格式无效' });
+        }
+      } catch (e) {
+        failed.push({ line: idx + 1, reason: e.message });
+      }
+    });
+
+    const base64 = btoa(converted.join('\n'));
 
     return jsonResponse({
-      vless: result,
+      total: vlessList.length,
+      success: converted.length,
+      failed: failed.length,
+      failedDetails: failed,
+      vless: converted.join('\n'),
       base64: base64
     });
   } catch (err) {
@@ -109,51 +114,25 @@ async function handleConvert(request) {
   }
 }
 
-// 解析并替换 VLESS 链接中的地址
 function replaceVlessAddress(vlessLink, newAddr) {
-  try {
-    // vless://uuid@address:port?params#name
-    const urlObj = new URL(vlessLink);
+  const urlObj = new URL(vlessLink);
+  if (urlObj.protocol !== 'vless:') return null;
+  if (!urlObj.username || !urlObj.hostname || !urlObj.port) return null;
 
-    if (urlObj.protocol !== 'vless:') {
-      return null;
-    }
-
-    const uuid = urlObj.username;
-    const originalHost = urlObj.hostname;
-    const port = urlObj.port;
-    const params = urlObj.search;
-    const hash = urlObj.hash;
-
-    if (!uuid || !originalHost || !port) {
-      return null;
-    }
-
-    // 如果新地址是 IPv6，需要加方括号
-    let addressPart = newAddr;
-    if (newAddr.includes(':') && !newAddr.startsWith('[')) {
-      addressPart = '[' + newAddr + ']';
-    }
-
-    // 重新组装
-    let result = `vless://${uuid}@${addressPart}:${port}${params}`;
-    if (hash) {
-      result += hash;
-    }
-
-    return result;
-  } catch (e) {
-    return null;
+  let addrPart = newAddr;
+  if (newAddr.includes(':') && !newAddr.startsWith('[')) {
+    addrPart = '[' + newAddr + ']';
   }
+
+  let result = 'vless://' + urlObj.username + '@' + addrPart + ':' + urlObj.port + urlObj.search;
+  if (urlObj.hash) result += urlObj.hash;
+  return result;
 }
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*'
-    }
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }
   });
 }
 
@@ -163,740 +142,371 @@ function renderHTML() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VLESS 地址转换器</title>
+<title>VLESS 批量转换器</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Noto+Sans+SC:wght@300;400;600;800&display=swap" rel="stylesheet">
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
 <style>
-  :root {
-    --bg: #0a0e17;
-    --bg2: #111827;
-    --card: #161e2e;
-    --card-hover: #1c2740;
-    --border: #253049;
-    --fg: #e8ecf4;
-    --fg-muted: #7a8baa;
-    --accent: #00e68a;
-    --accent-dim: rgba(0,230,138,0.12);
-    --accent-glow: rgba(0,230,138,0.3);
-    --danger: #ff5c6a;
-    --danger-dim: rgba(255,92,106,0.12);
-    --radius: 12px;
-  }
+:root{
+  --bg:#090d14;--bg2:#0f1520;--card:#141c2b;--card2:#182236;
+  --border:#1f2d45;--fg:#e4e9f2;--muted:#5f7599;
+  --accent:#00e68a;--accent2:#00c9ff;
+  --accent-dim:rgba(0,230,138,.1);--accent-glow:rgba(0,230,138,.25);
+  --red:#ff5263;--red-dim:rgba(255,82,99,.1);
+  --amber:#ffb347;--amber-dim:rgba(255,179,71,.1);
+  --r:12px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Noto Sans SC',sans-serif;background:var(--bg);color:var(--fg);min-height:100vh;overflow-x:hidden}
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+/* 背景 */
+.bg-mesh{position:fixed;inset:0;z-index:0;
+  background:
+    radial-gradient(ellipse 600px 400px at 15% 10%,rgba(0,230,138,.06),transparent),
+    radial-gradient(ellipse 500px 500px at 85% 80%,rgba(0,201,255,.05),transparent),
+    radial-gradient(ellipse 400px 300px at 50% 50%,rgba(0,230,138,.02),transparent);
+}
+.bg-dots{position:fixed;inset:0;z-index:0;
+  background-image:radial-gradient(rgba(0,230,138,.08) 1px,transparent 1px);
+  background-size:32px 32px;
+}
+.scan-line{position:fixed;left:0;right:0;height:2px;z-index:0;
+  background:linear-gradient(90deg,transparent,var(--accent-glow),transparent);
+  animation:scanDown 6s linear infinite;opacity:.4;pointer-events:none}
+@keyframes scanDown{0%{top:-2px}100%{top:100vh}}
 
-  body {
-    font-family: 'Noto Sans SC', sans-serif;
-    background: var(--bg);
-    color: var(--fg);
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+.wrap{position:relative;z-index:1;max-width:860px;margin:0 auto;padding:36px 20px 64px}
 
-  /* 背景动态效果 */
-  .bg-grid {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    background-image:
-      linear-gradient(rgba(0,230,138,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,230,138,0.03) 1px, transparent 1px);
-    background-size: 60px 60px;
-    animation: gridMove 20s linear infinite;
-  }
+/* 头部 */
+header{text-align:center;margin-bottom:44px}
+.logo{display:inline-flex;align-items:center;justify-content:center;
+  width:60px;height:60px;border-radius:16px;
+  background:linear-gradient(135deg,var(--accent-dim),rgba(0,201,255,.08));
+  border:1px solid var(--border);margin-bottom:18px;
+  font-size:24px;color:var(--accent);
+  animation:glow 3s ease-in-out infinite}
+@keyframes glow{0%,100%{box-shadow:0 0 0 0 var(--accent-glow)}50%{box-shadow:0 0 28px 4px var(--accent-glow)}}
+header h1{font-size:30px;font-weight:800;letter-spacing:-.5px;
+  background:linear-gradient(135deg,var(--fg) 40%,var(--accent));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+header p{color:var(--muted);font-size:14px;font-weight:300;margin-top:6px}
 
-  @keyframes gridMove {
-    0% { transform: translate(0, 0); }
-    100% { transform: translate(60px, 60px); }
-  }
+/* 卡片 */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  padding:26px;margin-bottom:18px;transition:border-color .3s,box-shadow .3s}
+.card:hover{border-color:rgba(0,230,138,.15);box-shadow:0 4px 30px rgba(0,0,0,.35)}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.card-head .icon{color:var(--accent);font-size:16px;width:30px;height:30px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--accent-dim);border-radius:8px;flex-shrink:0}
+.card-head span{font-size:15px;font-weight:600}
+.badge{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;
+  min-width:22px;height:22px;padding:0 6px;border-radius:6px;
+  font-size:11px;font-weight:800;font-family:'JetBrains Mono',monospace}
+.badge-step{background:var(--accent);color:var(--bg)}
+.badge-count{background:var(--accent-dim);color:var(--accent);border:1px solid rgba(0,230,138,.2)}
+.badge-fail{background:var(--red-dim);color:var(--red);border:1px solid rgba(255,82,99,.2)}
 
-  .bg-blob {
-    position: fixed;
-    border-radius: 50%;
-    filter: blur(120px);
-    z-index: 0;
-    pointer-events: none;
-  }
-  .bg-blob-1 {
-    width: 500px; height: 500px;
-    background: rgba(0,230,138,0.07);
-    top: -150px; right: -100px;
-    animation: blobFloat 12s ease-in-out infinite alternate;
-  }
-  .bg-blob-2 {
-    width: 400px; height: 400px;
-    background: rgba(0,180,220,0.05);
-    bottom: -100px; left: -80px;
-    animation: blobFloat 15s ease-in-out infinite alternate-reverse;
-  }
+/* 输入 */
+textarea,input[type=text]{width:100%;background:var(--bg2);border:1px solid var(--border);
+  border-radius:10px;color:var(--fg);font-family:'JetBrains Mono',monospace;
+  font-size:13px;padding:13px 15px;resize:vertical;outline:none;
+  transition:border-color .25s,box-shadow .25s}
+textarea:focus,input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+textarea::placeholder,input::placeholder{color:var(--muted);opacity:.5}
+textarea{min-height:120px;line-height:1.7}
+input[type=text]{height:46px}
 
-  @keyframes blobFloat {
-    0% { transform: translate(0, 0) scale(1); }
-    100% { transform: translate(40px, -30px) scale(1.15); }
-  }
+/* 按钮 */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 22px;border-radius:10px;
+  font-family:'Noto Sans SC',sans-serif;font-size:13px;font-weight:600;
+  border:none;cursor:pointer;transition:all .2s;outline:none;white-space:nowrap}
+.btn:active{transform:scale(.97)}
+.btn-p{background:var(--accent);color:var(--bg);box-shadow:0 2px 14px var(--accent-glow)}
+.btn-p:hover{box-shadow:0 4px 24px var(--accent-glow);filter:brightness(1.1)}
+.btn-p:disabled{opacity:.35;cursor:not-allowed;filter:none;box-shadow:none}
+.btn-s{background:var(--bg2);color:var(--fg);border:1px solid var(--border)}
+.btn-s:hover{border-color:var(--accent);background:var(--card2)}
+.btn-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
 
-  /* 主容器 */
-  .container {
-    position: relative;
-    z-index: 1;
-    max-width: 780px;
-    margin: 0 auto;
-    padding: 40px 20px 60px;
-  }
+/* 地址选择 */
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;
+  background:var(--accent-dim);border:1px solid rgba(0,230,138,.18);border-radius:8px;
+  font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--accent);
+  cursor:pointer;transition:all .2s;user-select:none}
+.chip:hover{background:rgba(0,230,138,.18);border-color:var(--accent);transform:translateY(-1px)}
+.chip.on{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:600}
+.divider{display:flex;align-items:center;gap:12px;margin-top:14px;color:var(--muted);font-size:12px}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border)}
+.manual{display:flex;gap:8px;margin-top:10px}
+.manual input{flex:1;font-size:13px;height:42px;padding:0 14px}
+.manual .btn{padding:0 16px;height:42px;font-size:13px}
 
-  /* 头部 */
-  header {
-    text-align: center;
-    margin-bottom: 48px;
-  }
+/* 统计条 */
+.stats{display:flex;gap:12px;margin-top:16px;flex-wrap:wrap}
+.stat{display:flex;align-items:center;gap:8px;padding:10px 16px;
+  border-radius:10px;font-size:13px;font-weight:600}
+.stat-ok{background:var(--accent-dim);color:var(--accent);border:1px solid rgba(0,230,138,.15)}
+.stat-err{background:var(--red-dim);color:var(--red);border:1px solid rgba(255,82,99,.15)}
+.stat-all{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(255,179,71,.15)}
 
-  .logo-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 64px; height: 64px;
-    border-radius: 18px;
-    background: linear-gradient(135deg, var(--accent-dim), rgba(0,180,220,0.1));
-    border: 1px solid var(--border);
-    margin-bottom: 20px;
-    font-size: 28px;
-    color: var(--accent);
-    animation: logoPulse 3s ease-in-out infinite;
-  }
+/* 输出 */
+.out-label{font-size:11px;color:var(--muted);margin-top:18px;margin-bottom:6px;
+  font-weight:700;text-transform:uppercase;letter-spacing:.6px}
+.out-box{position:relative;background:var(--bg2);border:1px solid var(--border);
+  border-radius:10px;padding:13px 15px;
+  font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);
+  word-break:break-all;min-height:56px;max-height:260px;overflow-y:auto;
+  line-height:1.7;transition:border-color .3s}
+.out-box.filled{color:var(--fg);border-color:rgba(0,230,138,.2)}
 
-  @keyframes logoPulse {
-    0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
-    50% { box-shadow: 0 0 30px 4px var(--accent-glow); }
-  }
+/* 失败详情 */
+.fail-list{margin-top:12px;max-height:120px;overflow-y:auto}
+.fail-item{display:flex;gap:8px;padding:6px 10px;font-size:12px;
+  font-family:'JetBrains Mono',monospace;color:var(--red);border-radius:6px;
+  background:var(--red-dim);margin-bottom:4px}
 
-  header h1 {
-    font-size: 32px;
-    font-weight: 800;
-    letter-spacing: -0.5px;
-    background: linear-gradient(135deg, var(--fg), var(--accent));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin-bottom: 8px;
-  }
+/* Toast */
+.toast-wrap{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:10px}
+.toast{display:flex;align-items:center;gap:10px;padding:13px 18px;border-radius:10px;
+  font-size:13px;font-weight:500;box-shadow:0 8px 32px rgba(0,0,0,.45);
+  animation:tIn .3s ease-out;max-width:360px}
+.toast.ok{background:rgba(0,230,138,.12);border:1px solid rgba(0,230,138,.25);color:var(--accent)}
+.toast.err{background:var(--red-dim);border:1px solid rgba(255,82,99,.25);color:var(--red)}
+.toast.out{animation:tOut .25s ease-in forwards}
+@keyframes tIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+@keyframes tOut{from{opacity:1;transform:translateX(0)}to{opacity:0;transform:translateX(40px)}}
 
-  header p {
-    color: var(--fg-muted);
-    font-size: 15px;
-    font-weight: 300;
-  }
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--bg);
+  border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
-  /* 卡片 */
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 28px;
-    margin-bottom: 20px;
-    transition: border-color 0.3s, box-shadow 0.3s;
-  }
-  .card:hover {
-    border-color: rgba(0,230,138,0.2);
-    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-  }
+footer{text-align:center;margin-top:48px;color:var(--muted);font-size:11px;opacity:.4}
 
-  .card-title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 16px;
-    font-weight: 600;
-    margin-bottom: 16px;
-    color: var(--fg);
-  }
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
 
-  .card-title i {
-    color: var(--accent);
-    font-size: 18px;
-    width: 32px; height: 32px;
-    display: flex; align-items: center; justify-content: center;
-    background: var(--accent-dim);
-    border-radius: 8px;
-  }
-
-  .step-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px; height: 22px;
-    border-radius: 6px;
-    background: var(--accent);
-    color: var(--bg);
-    font-size: 12px;
-    font-weight: 800;
-    margin-left: auto;
-  }
-
-  /* 输入区域 */
-  textarea, input[type="text"] {
-    width: 100%;
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    color: var(--fg);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    padding: 14px 16px;
-    resize: vertical;
-    transition: border-color 0.25s, box-shadow 0.25s;
-    outline: none;
-  }
-  textarea:focus, input[type="text"]:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-dim);
-  }
-  textarea::placeholder, input::placeholder {
-    color: var(--fg-muted);
-    opacity: 0.6;
-  }
-  textarea { min-height: 100px; }
-  input[type="text"] { height: 48px; }
-
-  /* 按钮 */
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px 24px;
-    border-radius: 10px;
-    font-family: 'Noto Sans SC', sans-serif;
-    font-size: 14px;
-    font-weight: 600;
-    border: none;
-    cursor: pointer;
-    transition: all 0.25s;
-    outline: none;
-  }
-  .btn:active { transform: scale(0.97); }
-
-  .btn-primary {
-    background: var(--accent);
-    color: var(--bg);
-    box-shadow: 0 2px 16px var(--accent-glow);
-  }
-  .btn-primary:hover {
-    box-shadow: 0 4px 28px var(--accent-glow);
-    filter: brightness(1.1);
-  }
-  .btn-primary:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    filter: none;
-    box-shadow: none;
-  }
-
-  .btn-secondary {
-    background: var(--bg2);
-    color: var(--fg);
-    border: 1px solid var(--border);
-  }
-  .btn-secondary:hover {
-    background: var(--card-hover);
-    border-color: var(--accent);
-  }
-
-  .btn-row {
-    display: flex;
-    gap: 10px;
-    margin-top: 16px;
-    flex-wrap: wrap;
-  }
-
-  /* 解析结果 */
-  .resolve-results {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 14px;
-  }
-
-  .addr-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 14px;
-    background: var(--accent-dim);
-    border: 1px solid rgba(0,230,138,0.2);
-    border-radius: 8px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    color: var(--accent);
-    cursor: pointer;
-    transition: all 0.2s;
-    user-select: none;
-  }
-  .addr-chip:hover {
-    background: rgba(0,230,138,0.2);
-    border-color: var(--accent);
-    transform: translateY(-1px);
-  }
-  .addr-chip.selected {
-    background: var(--accent);
-    color: var(--bg);
-    border-color: var(--accent);
-    font-weight: 600;
-  }
-
-  /* 手动输入地址 */
-  .manual-input {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
-  }
-  .manual-input input {
-    flex: 1;
-    font-size: 13px;
-    height: 42px;
-    padding: 0 14px;
-  }
-  .manual-input .btn {
-    padding: 0 18px;
-    height: 42px;
-    font-size: 13px;
-    white-space: nowrap;
-  }
-
-  .divider {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 14px;
-    color: var(--fg-muted);
-    font-size: 12px;
-  }
-  .divider::before, .divider::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
-
-  /* 输出区域 */
-  .output-box {
-    position: relative;
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-top: 14px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: var(--fg-muted);
-    word-break: break-all;
-    min-height: 60px;
-    max-height: 200px;
-    overflow-y: auto;
-    transition: border-color 0.3s;
-  }
-  .output-box.has-content {
-    color: var(--fg);
-    border-color: rgba(0,230,138,0.25);
-  }
-
-  .output-label {
-    font-size: 12px;
-    color: var(--fg-muted);
-    margin-top: 16px;
-    margin-bottom: 6px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  /* Toast 消息 */
-  .toast-container {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    z-index: 9999;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .toast {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 14px 20px;
-    border-radius: 10px;
-    font-size: 14px;
-    font-weight: 500;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    animation: toastIn 0.35s ease-out;
-    max-width: 380px;
-  }
-  .toast.success {
-    background: rgba(0,230,138,0.15);
-    border: 1px solid rgba(0,230,138,0.3);
-    color: var(--accent);
-  }
-  .toast.error {
-    background: var(--danger-dim);
-    border: 1px solid rgba(255,92,106,0.3);
-    color: var(--danger);
-  }
-  .toast.removing {
-    animation: toastOut 0.3s ease-in forwards;
-  }
-
-  @keyframes toastIn {
-    from { opacity: 0; transform: translateX(40px); }
-    to { opacity: 1; transform: translateX(0); }
-  }
-  @keyframes toastOut {
-    from { opacity: 1; transform: translateX(0); }
-    to { opacity: 0; transform: translateX(40px); }
-  }
-
-  /* 加载动画 */
-  .spinner {
-    display: inline-block;
-    width: 16px; height: 16px;
-    border: 2px solid var(--bg);
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.6s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* 信息提示条 */
-  .info-bar {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 14px 16px;
-    background: rgba(0,180,220,0.08);
-    border: 1px solid rgba(0,180,220,0.15);
-    border-radius: 10px;
-    margin-bottom: 20px;
-    font-size: 13px;
-    color: var(--fg-muted);
-    line-height: 1.6;
-  }
-  .info-bar i {
-    color: #00b4dc;
-    font-size: 16px;
-    margin-top: 2px;
-    flex-shrink: 0;
-  }
-
-  /* 底部 */
-  footer {
-    text-align: center;
-    margin-top: 48px;
-    color: var(--fg-muted);
-    font-size: 12px;
-    opacity: 0.5;
-  }
-
-  /* 自定义滚动条 */
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); }
-
-  /* 响应式 */
-  @media (max-width: 600px) {
-    .container { padding: 24px 14px 40px; }
-    header h1 { font-size: 24px; }
-    .card { padding: 20px; }
-    .btn-row { flex-direction: column; }
-    .btn-row .btn { justify-content: center; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-      animation-duration: 0.01ms !important;
-      transition-duration: 0.01ms !important;
-    }
-  }
+@media(max-width:600px){
+  .wrap{padding:20px 12px 40px}
+  header h1{font-size:22px}
+  .card{padding:18px}
+  .btn-row{flex-direction:column}
+  .btn-row .btn{justify-content:center}
+  .stats{flex-direction:column}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 </style>
 </head>
 <body>
+<div class="bg-mesh"></div>
+<div class="bg-dots"></div>
+<div class="scan-line"></div>
+<div class="toast-wrap" id="toasts"></div>
 
-<div class="bg-grid"></div>
-<div class="bg-blob bg-blob-1"></div>
-<div class="bg-blob bg-blob-2"></div>
-<div class="toast-container" id="toastContainer"></div>
-
-<div class="container">
+<div class="wrap">
   <header>
-    <div class="logo-icon"><i class="fas fa-shuffle"></i></div>
-    <h1>VLESS 地址转换器</h1>
-    <p>通过链接解析目标地址，替换 VLESS 节点中的 IP/域名，生成 Base64</p>
+    <div class="logo"><i class="fas fa-layer-group"></i></div>
+    <h1>VLESS 批量转换器</h1>
+    <p>粘贴 Base64 订阅或多条 VLESS 链接，批量替换地址并输出</p>
   </header>
 
-  <div class="info-bar">
-    <i class="fas fa-circle-info"></i>
-    <span>支持从任意链接中自动提取 IPv4 / IPv6 / 域名地址。常见用法：填入优选 IP 测速页面的链接、Cloudflare Trace 链接等，自动解析出可用地址。</span>
-  </div>
-
-  <!-- 步骤1：输入 VLESS 节点 -->
-  <div class="card">
-    <div class="card-title">
-      <i class="fas fa-link"></i>
+  <!-- 步骤1 -->
+  <section class="card">
+    <div class="card-head">
+      <div class="icon"><i class="fas fa-list"></i></div>
       <span>输入 VLESS 节点</span>
-      <span class="step-badge">1</span>
+      <span class="badge badge-count" id="nodeCount">0</span>
+      <span class="badge badge-step">1</span>
     </div>
-    <textarea id="vlessInput" placeholder="vless://uuid@address:port?type=tcp&security=reality#节点名称" spellcheck="false"></textarea>
-  </div>
+    <textarea id="vlessInput" placeholder="支持以下格式：&#10;&#10;1. 直接粘贴 Base64 订阅内容&#10;2. 每行一个 vless:// 链接&#10;3. 混合粘贴（自动识别 vless:// 开头的行）" spellcheck="false"></textarea>
+  </section>
 
-  <!-- 步骤2：解析链接 -->
-  <div class="card">
-    <div class="card-title">
-      <i class="fas fa-globe"></i>
-      <span>解析目标地址</span>
-      <span class="step-badge">2</span>
+  <!-- 步骤2 -->
+  <section class="card">
+    <div class="card-head">
+      <div class="icon"><i class="fas fa-crosshairs"></i></div>
+      <span>选择目标地址</span>
+      <span class="badge badge-step">2</span>
     </div>
-    <input type="text" id="linkInput" placeholder="输入用于解析地址的链接，如 https://speed.cloudflare.com/cdn-cgi/trace" spellcheck="false">
+    <input type="text" id="linkInput" placeholder="输入解析链接，如 https://speed.cloudflare.com/cdn-cgi/trace" spellcheck="false">
+    <div class="btn-row">
+      <button class="btn btn-p" id="resolveBtn" onclick="doResolve()">
+        <i class="fas fa-magnifying-glass"></i>解析链接
+      </button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="divider">或手动输入地址</div>
+    <div class="manual">
+      <input type="text" id="manualAddr" placeholder="输入 IP 或域名">
+      <button class="btn btn-s" onclick="useManual()"><i class="fas fa-check"></i>选用</button>
+    </div>
+  </section>
+
+  <!-- 步骤3 -->
+  <section class="card">
+    <div class="card-head">
+      <div class="icon"><i class="fas fa-bolt"></i></div>
+      <span>批量转换</span>
+      <span class="badge badge-step">3</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-p" id="convertBtn" onclick="doConvert()" disabled>
+        <i class="fas fa-arrows-rotate"></i>执行批量转换
+      </button>
+    </div>
+
+    <div class="stats" id="statsBar" style="display:none"></div>
+    <div class="fail-list" id="failList"></div>
+
+    <div class="out-label">VLESS 节点（逐行）</div>
+    <div class="out-box" id="outVless">转换结果将显示在这里</div>
+
+    <div class="out-label">Base64 编码</div>
+    <div class="out-box" id="outB64">Base64 结果将显示在这里</div>
 
     <div class="btn-row">
-      <button class="btn btn-primary" id="resolveBtn" onclick="resolveLink()">
-        <i class="fas fa-magnifying-glass"></i>
-        解析链接
-      </button>
+      <button class="btn btn-s" onclick="copyEl('outVless')"><i class="fas fa-copy"></i>复制节点</button>
+      <button class="btn btn-s" onclick="copyEl('outB64')"><i class="fas fa-copy"></i>复制 Base64</button>
     </div>
+  </section>
 
-    <div class="resolve-results" id="resolveResults"></div>
-
-    <div class="divider">或手动输入</div>
-    <div class="manual-input">
-      <input type="text" id="manualAddr" placeholder="直接输入 IP 或域名">
-      <button class="btn btn-secondary" onclick="selectManual()">
-        <i class="fas fa-check"></i>
-        选用
-      </button>
-    </div>
-  </div>
-
-  <!-- 步骤3：转换输出 -->
-  <div class="card">
-    <div class="card-title">
-      <i class="fas fa-arrow-right-arrow-left"></i>
-      <span>转换结果</span>
-      <span class="step-badge">3</span>
-    </div>
-
-    <div class="btn-row">
-      <button class="btn btn-primary" id="convertBtn" onclick="convertVless()" disabled>
-        <i class="fas fa-bolt"></i>
-        执行转换
-      </button>
-    </div>
-
-    <div class="output-label">VLESS 节点</div>
-    <div class="output-box" id="outputVless">转换后的 VLESS 节点将显示在这里</div>
-
-    <div class="output-label">Base64 编码</div>
-    <div class="output-box" id="outputBase64">Base64 结果将显示在这里</div>
-
-    <div class="btn-row">
-      <button class="btn btn-secondary" onclick="copyText('outputVless')">
-        <i class="fas fa-copy"></i>
-        复制节点
-      </button>
-      <button class="btn btn-secondary" onclick="copyText('outputBase64')">
-        <i class="fas fa-copy"></i>
-        复制 Base64
-      </button>
-    </div>
-  </div>
-
-  <footer>VLESS Address Converter &middot; 所有解析均在服务端完成</footer>
+  <footer>VLESS Batch Converter &middot; 服务端解析，本地零依赖</footer>
 </div>
 
 <script>
-  // 状态
-  let selectedAddress = '';
+var selectedAddr='';
 
-  // Toast 提示
-  function showToast(msg, type = 'success') {
-    const container = document.getElementById('toastContainer');
-    const toast = document.createElement('div');
-    toast.className = 'toast ' + type;
-    const icon = type === 'success' ? 'fa-circle-check' : 'fa-circle-xmark';
-    toast.innerHTML = '<i class="fas ' + icon + '"></i><span>' + msg + '</span>';
-    container.appendChild(toast);
-    setTimeout(function() {
-      toast.classList.add('removing');
-      setTimeout(function() { toast.remove(); }, 300);
-    }, 3000);
-  }
+/* ---------- Toast ---------- */
+function toast(msg,type){
+  var c=document.getElementById('toasts'),t=document.createElement('div');
+  t.className='toast '+(type||'ok');
+  var ic=type==='err'?'fa-circle-xmark':'fa-circle-check';
+  t.innerHTML='<i class="fas '+ic+'"></i><span>'+msg+'</span>';
+  c.appendChild(t);
+  setTimeout(function(){t.classList.add('out');setTimeout(function(){t.remove()},250)},3200);
+}
 
-  // 解析链接
-  async function resolveLink() {
-    const link = document.getElementById('linkInput').value.trim();
-    if (!link) {
-      showToast('请输入链接', 'error');
-      return;
-    }
-
-    const btn = document.getElementById('resolveBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> 解析中...';
-
-    try {
-      const resp = await fetch('/api/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ link: link })
-      });
-      const data = await resp.json();
-
-      if (data.error) {
-        showToast(data.error, 'error');
-        if (data.preview) {
-          document.getElementById('resolveResults').innerHTML =
-            '<div style="font-size:12px;color:var(--fg-muted);word-break:break-all;opacity:0.6;margin-top:4px;">响应预览: ' + escapeHtml(data.preview) + '</div>';
-        }
-        return;
-      }
-
-      if (data.addresses && data.addresses.length > 0) {
-        renderAddrChips(data.addresses);
-        showToast('从链接中提取到 ' + data.addresses.length + ' 个' + data.source + '地址');
-      } else {
-        showToast('未找到有效地址', 'error');
-      }
-    } catch (err) {
-      showToast('请求失败: ' + err.message, 'error');
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-magnifying-glass"></i> 解析链接';
+/* ---------- 实时计数 ---------- */
+document.getElementById('vlessInput').addEventListener('input',function(){
+  var v=this.value.trim();
+  var n=0;
+  if(v){
+    // 尝试base64解码
+    try{
+      var d=atob(v);
+      n=d.split(/[\\n\\r]+/).filter(function(l){return l.trim().startsWith('vless://')}).length;
+    }catch(e){
+      n=v.split(/[\\n\\r]+/).filter(function(l){return l.trim().startsWith('vless://')}).length;
     }
   }
+  document.getElementById('nodeCount').textContent=n;
+  checkReady();
+});
 
-  // 渲染地址选项
-  function renderAddrChips(addresses) {
-    const container = document.getElementById('resolveResults');
-    container.innerHTML = '';
-    addresses.forEach(function(addr) {
-      var chip = document.createElement('div');
-      chip.className = 'addr-chip';
-      chip.textContent = addr;
-      chip.onclick = function() {
-        selectAddress(addr, chip);
-      };
-      container.appendChild(chip);
-    });
+function checkReady(){
+  var hasAddr=!!selectedAddr;
+  var raw=document.getElementById('vlessInput').value.trim();
+  var hasNodes=false;
+  if(raw){
+    try{var d=atob(raw);hasNodes=d.split(/[\\n\\r]+/).some(function(l){return l.trim().startsWith('vless://')})}catch(e){hasNodes=raw.split(/[\\n\\r]+/).some(function(l){return l.trim().startsWith('vless://')})}
   }
+  document.getElementById('convertBtn').disabled=!(hasAddr&&hasNodes);
+}
 
-  // 选中地址
-  function selectAddress(addr, chipEl) {
-    // 取消之前选中
-    document.querySelectorAll('.addr-chip').forEach(function(c) {
-      c.classList.remove('selected');
-    });
-    chipEl.classList.add('selected');
-    selectedAddress = addr;
-    document.getElementById('manualAddr').value = '';
-    updateConvertBtn();
-  }
+/* ---------- 解析链接 ---------- */
+async function doResolve(){
+  var link=document.getElementById('linkInput').value.trim();
+  if(!link){toast('请输入链接','err');return}
+  var btn=document.getElementById('resolveBtn');
+  btn.disabled=true;btn.innerHTML='<span class="spinner"></span>解析中...';
+  try{
+    var r=await fetch('/api/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({link:link})});
+    var d=await r.json();
+    if(d.error){toast(d.error,'err');return}
+    if(d.addresses&&d.addresses.length>0){
+      renderChips(d.addresses);
+      toast('提取到 '+d.addresses.length+' 个'+d.source+'地址');
+    }else{toast('未找到有效地址','err')}
+  }catch(e){toast('请求失败: '+e.message,'err')}
+  finally{btn.disabled=false;btn.innerHTML='<i class="fas fa-magnifying-glass"></i>解析链接'}
+}
 
-  // 手动输入选用
-  function selectManual() {
-    var addr = document.getElementById('manualAddr').value.trim();
-    if (!addr) {
-      showToast('请输入地址', 'error');
-      return;
-    }
-    document.querySelectorAll('.addr-chip').forEach(function(c) {
-      c.classList.remove('selected');
-    });
-    selectedAddress = addr;
-    showToast('已选用地址: ' + addr);
-    updateConvertBtn();
-  }
-
-  // 更新转换按钮状态
-  function updateConvertBtn() {
-    var vless = document.getElementById('vlessInput').value.trim();
-    document.getElementById('convertBtn').disabled = !(vless && selectedAddress);
-  }
-
-  // 监听输入变化
-  document.getElementById('vlessInput').addEventListener('input', updateConvertBtn);
-
-  // 转换
-  async function convertVless() {
-    var vless = document.getElementById('vlessInput').value.trim();
-    if (!vless || !selectedAddress) return;
-
-    var btn = document.getElementById('convertBtn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> 转换中...';
-
-    try {
-      var resp = await fetch('/api/convert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vless: vless, newAddress: selectedAddress })
-      });
-      var data = await resp.json();
-
-      if (data.error) {
-        showToast(data.error, 'error');
-        return;
-      }
-
-      var vlessBox = document.getElementById('outputVless');
-      var base64Box = document.getElementById('outputBase64');
-      vlessBox.textContent = data.vless;
-      base64Box.textContent = data.base64;
-      vlessBox.classList.add('has-content');
-      base64Box.classList.add('has-content');
-      showToast('转换成功');
-    } catch (err) {
-      showToast('转换失败: ' + err.message, 'error');
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-bolt"></i> 执行转换';
-      updateConvertBtn();
-    }
-  }
-
-  // 复制文本
-  function copyText(id) {
-    var text = document.getElementById(id).textContent;
-    if (!text || text.indexOf('将显示在这里') !== -1) {
-      showToast('暂无内容可复制', 'error');
-      return;
-    }
-    navigator.clipboard.writeText(text).then(function() {
-      showToast('已复制到剪贴板');
-    }).catch(function() {
-      // 降级方案
-      var ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      showToast('已复制到剪贴板');
-    });
-  }
-
-  // HTML 转义
-  function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  // 回车触发解析
-  document.getElementById('linkInput').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') resolveLink();
+function renderChips(arr){
+  var c=document.getElementById('chips');c.innerHTML='';
+  arr.forEach(function(a){
+    var ch=document.createElement('div');ch.className='chip';ch.textContent=a;
+    ch.onclick=function(){pickChip(a,ch)};c.appendChild(ch);
   });
-  document.getElementById('manualAddr').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') selectManual();
+}
+
+function pickChip(addr,el){
+  document.querySelectorAll('.chip').forEach(function(c){c.classList.remove('on')});
+  el.classList.add('on');selectedAddr=addr;
+  document.getElementById('manualAddr').value='';
+  toast('已选择: '+addr);checkReady();
+}
+
+function useManual(){
+  var a=document.getElementById('manualAddr').value.trim();
+  if(!a){toast('请输入地址','err');return}
+  document.querySelectorAll('.chip').forEach(function(c){c.classList.remove('on')});
+  selectedAddr=a;toast('已选择: '+a);checkReady();
+}
+
+/* ---------- 批量转换 ---------- */
+async function doConvert(){
+  var raw=document.getElementById('vlessInput').value.trim();
+  if(!raw||!selectedAddr)return;
+  var btn=document.getElementById('convertBtn');
+  btn.disabled=true;btn.innerHTML='<span class="spinner"></span>转换中...';
+  try{
+    var r=await fetch('/api/convert',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input:raw,newAddress:selectedAddr})});
+    var d=await r.json();
+    if(d.error){toast(d.error,'err');return}
+
+    // 统计
+    var sb=document.getElementById('statsBar');sb.style.display='flex';sb.innerHTML='';
+    sb.innerHTML+=
+      '<div class="stat stat-all"><i class="fas fa-layer-group"></i>总计 '+d.total+'</div>'+
+      '<div class="stat stat-ok"><i class="fas fa-circle-check"></i>成功 '+d.success+'</div>';
+    if(d.failed>0){
+      sb.innerHTML+='<div class="stat stat-err"><i class="fas fa-circle-xmark"></i>失败 '+d.failed+'</div>';
+    }
+
+    // 失败详情
+    var fl=document.getElementById('failList');fl.innerHTML='';
+    if(d.failedDetails&&d.failedDetails.length>0){
+      d.failedDetails.forEach(function(f){
+        fl.innerHTML+='<div class="fail-item"><span>第 '+f.line+' 行</span><span>'+esc(f.reason)+'</span></div>';
+      });
+    }
+
+    // 输出
+    var ov=document.getElementById('outVless');ov.textContent=d.vless;ov.classList.add('filled');
+    var ob=document.getElementById('outB64');ob.textContent=d.base64;ob.classList.add('filled');
+    toast('批量转换完成，成功 '+d.success+' 条');
+  }catch(e){toast('转换失败: '+e.message,'err')}
+  finally{btn.disabled=false;btn.innerHTML='<i class="fas fa-arrows-rotate"></i>执行批量转换';checkReady()}
+}
+
+/* ---------- 复制 ---------- */
+function copyEl(id){
+  var t=document.getElementById(id).textContent;
+  if(!t||t.indexOf('将显示在这里')!==-1){toast('暂无内容','err');return}
+  navigator.clipboard.writeText(t).then(function(){toast('已复制到剪贴板')}).catch(function(){
+    var ta=document.createElement('textarea');ta.value=t;ta.style.cssText='position:fixed;left:-9999px';
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    toast('已复制到剪贴板');
   });
+}
+
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+/* 回车触发 */
+document.getElementById('linkInput').addEventListener('keydown',function(e){if(e.key==='Enter')doResolve()});
+document.getElementById('manualAddr').addEventListener('keydown',function(e){if(e.key==='Enter')useManual()});
 </script>
 </body>
 </html>`;
