@@ -12,7 +12,7 @@ export default {
     }
 
     // ==========================================
-    // 步骤 1：请求 ADDR 并提取 IP 和备注 (逻辑不变)
+    // 步骤 1：请求 ADDR 并提取 IP 和备注
     // ==========================================
     const addresses = addrStr.split(',').map(addr => addr.trim()).filter(addr => addr.length > 0);
     const fetchPromises = addresses.map(async (targetUrl) => {
@@ -48,7 +48,7 @@ export default {
     }
 
     // ==========================================
-    // 步骤 2：没有 template 参数，显示操作面板 (UI 优化)
+    // 步骤 2：没有 template 参数，显示操作面板
     // ==========================================
     if (!template) {
       const html = `
@@ -67,7 +67,6 @@ export default {
             button { background: #3b82f6; color: #fff; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; }
             button:hover { background: #2563eb; }
             .info-box { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; padding: 15px; border-radius: 5px; margin-bottom: 20px; font-size: 14px; }
-            .tag { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; margin: 0 2px;}
           </style>
         </head>
         <body>
@@ -77,8 +76,8 @@ export default {
               <strong>已从 ADDR 中成功解析 ${extractedData.length} 个 IP 记录。</strong><br>
               系统会提取记录中的 IP 替换模板地址，并将备注作为新节点名称。
             </div>
-            <p>请粘贴 <strong>1 个 VLESS 模板节点</strong> （支持 <span class="tag">ws</span> <span class="tag">grpc</span> <span class="tag">xhttp</span> <span class="tag">HTTPUpgrade</span> 等）：</p>
-            <textarea id="tpl" placeholder="示例 (xhttp)：vless://a1b2c3d4-xxxx@1.1.1.1:443?type=xhttp&security=tls&path=/xhttp&mode=packet-up#默认模板&#10;&#10;示例 (ws)：vless://a1b2c3d4-xxxx@1.1.1.1:443?type=ws&security=tls#默认模板"></textarea>
+            <p>请粘贴 <strong>1 个 VLESS 模板节点</strong>（支持填写 IP、域名或占位符）：</p>
+            <textarea id="tpl" placeholder="vless://uuid@ip:443?encryption=none&security=tls&sni=x.com&alpn=h2&fp=chrome&type=xhttp&host=x.com&path=%2Fde-xhttp&mode=auto#xhttp&#10;或&#10;vless://uuid@example.com:443?type=ws&security=tls#默认模板"></textarea>
             <button onclick="generate()">生成节点并获取订阅链接</button>
           </div>
           <script>
@@ -97,45 +96,49 @@ export default {
     }
 
     // ==========================================
-    // 步骤 3：解析 VLESS 模板 (逻辑不变，通用正则)
+    // 步骤 3：解析 VLESS 模板 (终极兼容版正则)
     // ==========================================
     function parseVless(tpl) {
-      const regex = /^(vless:\/\/[0-9a-f-]+@)((?:\[[0-9a-fA-F:]+\])|(?:[0-9]{1,3}\.(?:[0-9]{1,3}\.){2}[0-9]{1,3})|(?:[0-9a-fA-F:]+))(:\d+)(\?[^#]*)?(\#.*)?$/i;
+      // 核心正则说明：
+      // ((?:\[[^\]]+\])|[^:]+) 表示：
+      // 1. 如果是中括号括起来的IPv6 (如 [2001::1])，整体匹配
+      // 2. 否则匹配到冒号之前的所有内容 (兼容 域名、IPv4、甚至字母"ip")
+      const regex = /^(vless:\/\/[0-9a-f-]+@)((?:\[[^\]]+\])|[^:]+)(:\d+)([?][^#]*)?([#].*)?$/i;
       const match = tpl.trim().match(regex);
       if (!match) return null;
 
-      const pureIp = match[2].replace(/^\[|\]$/g, '');
-      const paramsStr = match[4] || ""; // 例如：?type=xhttp&security=tls
+      const paramsStr = match[4] || "";
 
-      // 提取当前使用的传输协议 type，用于前端展示
       const typeMatch = paramsStr.match(/[?&]type=([^&#]+)/i);
       const transportType = typeMatch ? typeMatch[1].toUpperCase() : "未指定";
 
       return {
-        prefix: match[1],
-        port: match[3],
-        params: paramsStr,
-        suffix: match[5] || "",
+        prefix: match[1],       // vless://uuid@
+        port: match[3],         // :443
+        params: paramsStr,      // ?...各种参数
+        suffix: match[5] || "", // #...节点名
         transportType
       };
     }
 
     const parsedTemplate = parseVless(template);
     if (!parsedTemplate) {
-      return new Response("错误：输入的 VLESS 节点格式无法解析，请检查格式是否正确。", { status: 400 });
+      return new Response("错误：输入的 VLESS 节点格式无法解析，请检查是否缺少端口或格式错乱。", { status: 400 });
     }
 
     // ==========================================
-    // 步骤 4：批量生成新节点 (逻辑不变)
+    // 步骤 4：批量生成新节点
     // ==========================================
     const newNodes = extractedData.map(data => {
+      // 智能判断：如果 ADDR 解析出来的是 IPv6，自动补上中括号 []，否则原样拼接
       const isV6 = data.ip.includes(':');
       const formattedIp = isV6 ? `[${data.ip}]` : data.ip;
+
       return `${parsedTemplate.prefix}${formattedIp}${parsedTemplate.port}${parsedTemplate.params}#${data.remark}`;
     });
 
     // ==========================================
-    // 步骤 5：Base64 订阅输出 (逻辑不变)
+    // 步骤 5：Base64 订阅输出
     // ==========================================
     if (isSubscribeMode) {
       const plainText = newNodes.join('\n');
@@ -150,7 +153,7 @@ export default {
     }
 
     // ==========================================
-    // 步骤 6：普通网页输出 (增加协议展示)
+    // 步骤 6：普通网页输出
     // ==========================================
     const subscribeLink = `${url.origin}${url.pathname}?template=${encodeURIComponent(template)}&format=base64`;
 
