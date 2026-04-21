@@ -12,7 +12,7 @@ export default {
     }
 
     // ==========================================
-    // 步骤 1：请求 ADDR 并提取 IP 和备注
+    // 步骤 1：请求 ADDR 并提取 IP 和备注 (逻辑不变)
     // ==========================================
     const addresses = addrStr.split(',').map(addr => addr.trim()).filter(addr => addr.length > 0);
     const fetchPromises = addresses.map(async (targetUrl) => {
@@ -20,14 +20,13 @@ export default {
         const response = await fetch(targetUrl);
         return await response.text();
       } catch (err) {
-        return ""; // 请求失败则返回空
+        return "";
       }
     });
 
     const resultsText = await Promise.all(fetchPromises);
     const allText = resultsText.join('\n');
 
-    // 正则提取 IPv4 和 IPv6 及备注
     const ipV4Regex = /(?:(?:25[0-5]|2[0-4]\d|1?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|1?\d{1,2})/;
     const ipV6Regex = /(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}/;
 
@@ -49,7 +48,7 @@ export default {
     }
 
     // ==========================================
-    // 步骤 2：如果没有 template 参数，显示操作面板
+    // 步骤 2：没有 template 参数，显示操作面板 (UI 优化)
     // ==========================================
     if (!template) {
       const html = `
@@ -61,13 +60,14 @@ export default {
           <title>VLESS 节点批量生成器</title>
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; margin: 0; padding: 40px 15px; display: flex; justify-content: center; }
-            .card { background: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 600px; width: 100%; }
+            .card { background: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 650px; width: 100%; }
             h2 { margin-top: 0; color: #1f2937; }
             p { color: #6b7280; font-size: 14px; line-height: 1.6; }
-            textarea { width: 100%; height: 120px; margin: 15px 0; padding: 10px; border: 1px solid #d1d5db; border-radius: 5px; font-family: monospace; font-size: 13px; box-sizing: border-box; resize: vertical; }
+            textarea { width: 100%; height: 120px; margin: 15px 0; padding: 10px; border: 1px solid #d1d5db; border-radius: 5px; font-family: monospace; font-size: 12px; box-sizing: border-box; resize: vertical; }
             button { background: #3b82f6; color: #fff; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; }
             button:hover { background: #2563eb; }
             .info-box { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; padding: 15px; border-radius: 5px; margin-bottom: 20px; font-size: 14px; }
+            .tag { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; margin: 0 2px;}
           </style>
         </head>
         <body>
@@ -75,10 +75,10 @@ export default {
             <h2>🚀 VLESS 节点批量生成器</h2>
             <div class="info-box">
               <strong>已从 ADDR 中成功解析 ${extractedData.length} 个 IP 记录。</strong><br>
-              系统会提取记录中的 IP 替换掉下方节点模板的地址，并将记录备注作为新节点名称。
+              系统会提取记录中的 IP 替换模板地址，并将备注作为新节点名称。
             </div>
-            <p>请在下方粘贴 <strong>1 个 VLESS 节点模板</strong>（支持 IPv4/IPv6）：</p>
-            <textarea id="tpl" placeholder="例如：vless://a1b2c3d4-xxxx@1.1.1.1:443?type=ws&security=tls#默认节点"></textarea>
+            <p>请粘贴 <strong>1 个 VLESS 模板节点</strong> （支持 <span class="tag">ws</span> <span class="tag">grpc</span> <span class="tag">xhttp</span> <span class="tag">HTTPUpgrade</span> 等）：</p>
+            <textarea id="tpl" placeholder="示例 (xhttp)：vless://a1b2c3d4-xxxx@1.1.1.1:443?type=xhttp&security=tls&path=/xhttp&mode=packet-up#默认模板&#10;&#10;示例 (ws)：vless://a1b2c3d4-xxxx@1.1.1.1:443?type=ws&security=tls#默认模板"></textarea>
             <button onclick="generate()">生成节点并获取订阅链接</button>
           </div>
           <script>
@@ -88,7 +88,6 @@ export default {
                 alert('请输入正确的 VLESS 节点格式！');
                 return;
               }
-              // 跳转到带有 template 参数的页面
               window.location.href = '?template=' + encodeURIComponent(tpl);
             }
           </script>
@@ -98,22 +97,26 @@ export default {
     }
 
     // ==========================================
-    // 步骤 3：解析 VLESS 模板
+    // 步骤 3：解析 VLESS 模板 (逻辑不变，通用正则)
     // ==========================================
     function parseVless(tpl) {
-      // 匹配 vless://uuid@IP:端口?参数#名称 (兼容IPv6带不带括号的情况)
       const regex = /^(vless:\/\/[0-9a-f-]+@)((?:\[[0-9a-fA-F:]+\])|(?:[0-9]{1,3}\.(?:[0-9]{1,3}\.){2}[0-9]{1,3})|(?:[0-9a-fA-F:]+))(:\d+)(\?[^#]*)?(\#.*)?$/i;
       const match = tpl.trim().match(regex);
       if (!match) return null;
 
-      // 去除可能存在的 IPv6 方括号
       const pureIp = match[2].replace(/^\[|\]$/g, '');
+      const paramsStr = match[4] || ""; // 例如：?type=xhttp&security=tls
+
+      // 提取当前使用的传输协议 type，用于前端展示
+      const typeMatch = paramsStr.match(/[?&]type=([^&#]+)/i);
+      const transportType = typeMatch ? typeMatch[1].toUpperCase() : "未指定";
 
       return {
-        prefix: match[1],           // vless://uuid@
-        port: match[3],             // :port
-        params: match[4] || "",     // ?params
-        suffix: match[5] || ""      // #name
+        prefix: match[1],
+        port: match[3],
+        params: paramsStr,
+        suffix: match[5] || "",
+        transportType
       };
     }
 
@@ -123,17 +126,16 @@ export default {
     }
 
     // ==========================================
-    // 步骤 4：批量生成新节点
+    // 步骤 4：批量生成新节点 (逻辑不变)
     // ==========================================
     const newNodes = extractedData.map(data => {
       const isV6 = data.ip.includes(':');
-      // 如果是 IPv6，拼接时加上中括号
       const formattedIp = isV6 ? `[${data.ip}]` : data.ip;
       return `${parsedTemplate.prefix}${formattedIp}${parsedTemplate.port}${parsedTemplate.params}#${data.remark}`;
     });
 
     // ==========================================
-    // 步骤 5：Base64 订阅输出
+    // 步骤 5：Base64 订阅输出 (逻辑不变)
     // ==========================================
     if (isSubscribeMode) {
       const plainText = newNodes.join('\n');
@@ -148,14 +150,14 @@ export default {
     }
 
     // ==========================================
-    // 步骤 6：普通网页输出（展示结果与订阅链接）
+    // 步骤 6：普通网页输出 (增加协议展示)
     // ==========================================
     const subscribeLink = `${url.origin}${url.pathname}?template=${encodeURIComponent(template)}&format=base64`;
 
     const tableRows = extractedData.map((data, i) => `
       <tr>
         <td style="padding: 10px; border: 1px solid #e5e7eb; text-align: center;">${i + 1}</td>
-        <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #dc2626; text-decoration: line-through;">${parsedTemplate.prefix.includes('[') ? '[' + data.ip + ']' : data.ip}</td>
+        <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #dc2626; text-decoration: line-through;">${data.ip}</td>
         <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #16a34a; font-weight: bold;">${data.ip.includes(':') ? '[' + data.ip + ']' : data.ip}</td>
         <td style="padding: 10px; border: 1px solid #e5e7eb;">${data.remark}</td>
       </tr>
@@ -175,6 +177,9 @@ export default {
           h2 { margin-top: 0; color: #1f2937; }
           table { width: 100%; border-collapse: collapse; margin-top: 15px; }
           th { background: #1f2937; color: #fff; padding: 10px; text-align: left; }
+          .protocol-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 14px; font-weight: bold; margin-left: 10px; vertical-align: middle; }
+          .badge-xhttp { background: #fef3c7; color: #92400e; border: 1px solid #fbbf24; }
+          .badge-other { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
           .sub-box { background: #eff6ff; border: 2px solid #3b82f6; padding: 20px; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap; }
           .sub-link { flex: 1; word-break: break-all; font-family: monospace; font-size: 13px; color: #1d4ed8; background: #fff; padding: 10px; border-radius: 4px; border: 1px solid #bfdbfe; user-select: all; }
           .copy-btn { background: #3b82f6; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; white-space: nowrap; }
@@ -186,7 +191,12 @@ export default {
       <body>
         <div class="container">
           <div class="card">
-            <h2>✅ 成功生成 ${newNodes.length} 个新节点</h2>
+            <h2>
+              ✅ 成功生成 ${newNodes.length} 个新节点
+              <span class="protocol-badge ${parsedTemplate.transportType === 'XHTTP' ? 'badge-xhttp' : 'badge-other'}">
+                当前协议：${parsedTemplate.transportType}
+              </span>
+            </h2>
             <table>
               <thead>
                 <tr>
@@ -205,7 +215,7 @@ export default {
           
           <div class="card">
             <h2>📥 Base64 订阅链接</h2>
-            <p style="color:#6b7280; font-size:14px; margin-bottom:15px;">请将下方链接复制到您的代理客户端（如 Clash, v2rayN 等）中订阅：</p>
+            <p style="color:#6b7280; font-size:14px; margin-bottom:15px;">请将下方链接复制到您的代理客户端中订阅：</p>
             <div class="sub-box">
               <div class="sub-link" id="subLink">${subscribeLink}</div>
               <button class="copy-btn" onclick="copyLink()">一键复制</button>
@@ -221,7 +231,6 @@ export default {
               btn.style.background = '#16a34a';
               setTimeout(() => { btn.innerText = '一键复制'; btn.style.background = '#3b82f6'; }, 2000);
             }).catch(err => {
-              // 降级方案
               const textarea = document.createElement('textarea');
               textarea.value = text; document.body.appendChild(textarea);
               textarea.select(); document.execCommand('copy'); document.body.removeChild(textarea);
