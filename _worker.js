@@ -12,7 +12,7 @@ export default {
     }
 
     // ==========================================
-    // 步骤 1：请求 ADDR，提取 IP/域名，【严格排除 IPv6】
+    // 步骤 1：请求 ADDR，极强容错提取，排除 IPv6
     // ==========================================
     const addresses = addrStr.split(',').map(addr => addr.trim()).filter(addr => addr.length > 0);
     const fetchPromises = addresses.map(async (targetUrl) => {
@@ -25,29 +25,48 @@ export default {
     const resultsText = await Promise.all(fetchPromises);
     const allText = resultsText.join('\n');
 
-    const ipV6Regex = /(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}/;
-    
     const extractedData = [];
+    let autoIndex = 1; // 用于给没有 # 的行自动编号
+
     for (const line of allText.split('\n')) {
-      const hashIndex = line.indexOf('#');
-      if (hashIndex !== -1) {
-        const possibleAddr = line.substring(0, hashIndex).trim();
-        const remark = line.substring(hashIndex + 1).trim();
-        
-        // 核心过滤：只要包含冒号，就视为 IPv6，直接跳过不处理
-        if (possibleAddr.includes(':')) {
-          continue;
-        }
-        
-        // 剩下的只要非空，无论是 IPv4 还是域名，全部放行
-        if (possibleAddr.length > 0) {
-          extractedData.push({ addr: possibleAddr, remark });
-        }
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+
+      let possibleAddr = "";
+      let remark = "";
+
+      // 判断是否有 # 分隔符
+      if (trimmedLine.includes('#')) {
+        const hashIndex = trimmedLine.indexOf('#');
+        possibleAddr = trimmedLine.substring(0, hashIndex).trim();
+        remark = trimmedLine.substring(hashIndex + 1).trim();
+      } else {
+        // 没有 # 的话，整行都当作地址，自动生成一个名字
+        possibleAddr = trimmedLine;
+        remark = `自动节点_${autoIndex}`;
+      }
+
+      // 【新增容错】自动清理可能带上的 http/https 协议头
+      possibleAddr = possibleAddr.replace(/^(https?:\/\/)/i, "").replace(/^\/\//, "");
+      // 【新增容错】自动清理域名尾部可能带上的斜杠
+      possibleAddr = possibleAddr.replace(/\/+$/, "");
+      // 再次去空格
+      possibleAddr = possibleAddr.trim();
+
+      // 核心过滤：只要包含冒号，就视为 IPv6，直接跳过不处理
+      if (possibleAddr.includes(':')) {
+        continue;
+      }
+
+      // 只要清理后非空，无论是 IPv4 还是域名，全部放行
+      if (possibleAddr.length > 0) {
+        extractedData.push({ addr: possibleAddr, remark });
+        autoIndex++;
       }
     }
 
     if (extractedData.length === 0) {
-      return new Response("错误：未能解析出有效的 IPv4 或域名（已自动排除所有 IPv6）。", { status: 400 });
+      return new Response("错误：未能解析出有效的 IPv4 或域名（已排除 IPv6）。请检查 ADDR 返回的文本格式。", { status: 400 });
     }
 
     // ==========================================
@@ -70,21 +89,17 @@ export default {
             button { background: #3b82f6; color: #fff; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; }
             button:hover { background: #2563eb; }
             .info-box { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; padding: 15px; border-radius: 5px; margin-bottom: 20px; font-size: 14px; }
-            .warn-box { background: #fef3c7; border: 1px solid #fde68a; color: #92400e; padding: 10px; border-radius: 5px; margin-bottom: 20px; font-size: 13px; }
           </style>
         </head>
         <body>
           <div class="card">
             <h2>🔗 VLESS 纯地址替换</h2>
             <div class="info-box">
-              <strong>已从 ADDR 解析到 ${extractedData.length} 条有效记录。</strong><br>
-              提取规则：保留 IPv4 和域名，<strong>已自动排除所有 IPv6</strong>。
-            </div>
-            <div class="warn-box">
-              ⚠️ 注意：系统只会替换节点中的【IP/域名】部分，UUID、端口、路径、参数等其他任何配置均保持原样！
+              <strong>已从 ADDR 成功解析到 ${extractedData.length} 条有效记录。</strong><br>
+              (已自动剔除 IPv6，已自动清理 http:// 前缀)
             </div>
             <p>请粘贴 <strong>1 个完整的 VLESS 模板节点</strong>：</p>
-            <textarea id="tpl" placeholder="vless://uuid@1.2.3.4:443?type=ws&security=tls&path=%2Fxxx#原节点名"></textarea>
+            <textarea id="tpl" placeholder="vless://uuid@1.2.3.4:443?type=ws&security=tls#原节点名"></textarea>
             <button onclick="generate()">替换地址并生成订阅</button>
           </div>
           <script>
@@ -103,16 +118,15 @@ export default {
     // 步骤 3：精准切分 VLESS 模板
     // ==========================================
     function parseVless(tpl) {
-      // 正则说明：@ 后面到冒号前面，全部视为原地址 (支持 IPv4, 域名, 甚至带括号的IPv6)
       const regex = /^(vless:\/\/[0-9a-f-]+@)((?:\[[^\]]+\])|[^:]+)(:\d+)([?][^#]*)?([#].*)?$/i;
       const match = tpl.trim().match(regex);
       if (!match) return null;
       
       return {
-        prefix: match[1],       // vless://uuid@
-        port: match[3],         // :443
-        params: match[4] || "", // ?type=ws...
-        suffix: match[5] || ""  // #原节点名
+        prefix: match[1],       
+        port: match[3],         
+        params: match[4] || "", 
+        suffix: match[5] || ""  
       };
     }
 
@@ -121,11 +135,13 @@ export default {
       return new Response("错误：节点格式无法解析，请检查是否缺少端口。", { status: 400 });
     }
 
+    // 获取模板原本的地址（仅用于前端页面展示对比）
+    const originalAddr = template.match(/@([^:]+)/)[1].replace(/^\[|\]$/g, '');
+
     // ==========================================
-    // 步骤 4：执行纯净替换 (只换地址，换名称)
+    // 步骤 4：执行纯净替换
     // ==========================================
     const newNodes = extractedData.map(data => {
-      // 因为前面已经排除了IPv6，所以这里直接原样拼接，绝对安全
       return `${parsedTemplate.prefix}${data.addr}${parsedTemplate.port}${parsedTemplate.params}#${data.remark}`;
     });
 
@@ -149,9 +165,9 @@ export default {
     const tableRows = extractedData.map((data, i) => `
       <tr>
         <td style="padding: 10px; border: 1px solid #e5e7eb; text-align: center;">${i + 1}</td>
-        <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #dc2626; text-decoration: line-through; word-break: break-all;">${template.match(/@([^:]+)/)[1].replace(/^\[|\]$/g, '')}</td>
-        <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #16a34a; font-weight: bold;">${data.addr}</td>
-        <td style="padding: 10px; border: 1px solid #e5e7eb;">${data.remark}</td>
+        <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #dc2626; text-decoration: line-through;">${escapeHtml(originalAddr)}</td>
+        <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #16a34a; font-weight: bold; word-break: break-all;">${escapeHtml(data.addr)}</td>
+        <td style="padding: 10px; border: 1px solid #e5e7eb;">${escapeHtml(data.remark)}</td>
       </tr>
     `).join('');
 
@@ -164,7 +180,7 @@ export default {
         <title>生成成功</title>
         <style>
           body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; margin: 0; padding: 40px 15px; }
-          .container { max-width: 900px; margin: 0 auto; }
+          .container { max-width: 950px; margin: 0 auto; }
           .card { background: #fff; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 20px; }
           h2 { margin-top: 0; color: #1f2937; }
           table { width: 100%; border-collapse: collapse; margin-top: 15px; }
@@ -182,7 +198,7 @@ export default {
         <div class="container">
           <div class="card">
             <h2>✅ 成功生成 ${newNodes.length} 个节点</h2>
-            <p style="color:#6b7280; font-size:14px;">除地址和节点名外，其他参数已完全保留原模板设置：</p>
+            <p style="color:#6b7280; font-size:14px;">第一条节点结构预览（除地址外完全保留原参数）：</p>
             <pre>${escapeHtml(newNodes[0])}</pre>
             <table>
               <thead>
