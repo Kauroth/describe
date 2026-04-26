@@ -3,226 +3,178 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const addrStr = env.ADDR;
-    const template = url.searchParams.get('template');
     const isSubscribeMode = url.searchParams.get('format') === 'base64';
+    
+    // 1. 读取所有模板变量，并赋予默认值
+    const addrStr = env.ADDR;
+    const tplUuid = env.TPL_UUID || "";
+    const tplPort = env.TPL_PORT || "443";
+    const tplSni = env.TPL_SNI || "";
+    const tplHost = env.TPL_HOST || "";
+    const tplPath = env.TPL_PATH || "";
+    const tplType = env.TPL_TYPE || "ws";
+    const tplSecurity = env.TPL_SECURITY || "tls";
+    const tplFp = env.TPL_FP || "chrome";
+    const tplEncryption = env.TPL_ENCRYPTION || "none";
+    const tplExtra = env.TPL_EXTRA || "";
+    const defaultOverride = env.DEFAULT_PARAMS || "";
 
-    if (!addrStr) {
-      return new Response("错误：请先在 Cloudflare 后台配置环境变量 ADDR。", { status: 500 });
+    if (!addrStr || !tplUuid) {
+      return new Response("错误：请至少配置环境变量 ADDR 和 TPL_UUID。", { status: 500 });
     }
 
     // ==========================================
-    // 步骤 1：请求 ADDR 并提取 IP 和备注
+    // 步骤 1：请求 ADDR 并提取 IP/域名 和备注
     // ==========================================
     const addresses = addrStr.split(',').map(addr => addr.trim()).filter(addr => addr.length > 0);
     const fetchPromises = addresses.map(async (targetUrl) => {
       try {
         const response = await fetch(targetUrl);
         return await response.text();
-      } catch (err) {
-        return "";
-      }
+      } catch (err) { return ""; }
     });
-
+    
     const resultsText = await Promise.all(fetchPromises);
     const allText = resultsText.join('\n');
 
     const ipV4Regex = /(?:(?:25[0-5]|2[0-4]\d|1?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|1?\d{1,2})/;
     const ipV6Regex = /(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}/;
-
+    
     const extractedData = [];
-    const lines = allText.split('\n');
-    for (const line of lines) {
+    for (const line of allText.split('\n')) {
       const hashIndex = line.indexOf('#');
       if (hashIndex !== -1) {
-        const possibleIp = line.substring(0, hashIndex).trim();
+        const possibleAddr = line.substring(0, hashIndex).trim();
         const remark = line.substring(hashIndex + 1).trim();
-        if (ipV4Regex.test(possibleIp) || ipV6Regex.test(possibleIp)) {
-          extractedData.push({ ip: possibleIp, remark });
+        if (ipV4Regex.test(possibleAddr) || ipV6Regex.test(possibleAddr) || possibleAddr.includes('.')) {
+          extractedData.push({ addr: possibleAddr, remark });
         }
       }
     }
 
     if (extractedData.length === 0) {
-      return new Response("错误：未能从 ADDR 指定的网址中解析出任何 IP#备注 数据。", { status: 400 });
+      return new Response("错误：未能从 ADDR 解析出任何数据。", { status: 400 });
     }
 
     // ==========================================
-    // 步骤 2：没有 template 参数，显示操作面板
+    // 步骤 2：在底层自动拼装基础 VLESS 模板
     // ==========================================
-    if (!template) {
-      const html = `
-        <!DOCTYPE html>
-        <html lang="zh-CN">
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>VLESS 节点批量生成器</title>
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; margin: 0; padding: 40px 15px; display: flex; justify-content: center; }
-            .card { background: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); max-width: 650px; width: 100%; }
-            h2 { margin-top: 0; color: #1f2937; }
-            p { color: #6b7280; font-size: 14px; line-height: 1.6; }
-            textarea { width: 100%; height: 120px; margin: 15px 0; padding: 10px; border: 1px solid #d1d5db; border-radius: 5px; font-family: monospace; font-size: 12px; box-sizing: border-box; resize: vertical; }
-            button { background: #3b82f6; color: #fff; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; }
-            button:hover { background: #2563eb; }
-            .info-box { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; padding: 15px; border-radius: 5px; margin-bottom: 20px; font-size: 14px; }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <h2>🚀 VLESS 节点批量生成器</h2>
-            <div class="info-box">
-              <strong>已从 ADDR 中成功解析 ${extractedData.length} 个 IP 记录。</strong><br>
-              系统会提取记录中的 IP 替换模板地址，并将备注作为新节点名称。
-            </div>
-            <p>请粘贴 <strong>1 个 VLESS 模板节点</strong>（支持填写 IP、域名或占位符）：</p>
-            <textarea id="tpl" placeholder="vless://uuid@ip:443?encryption=none&security=tls&sni=x.com&alpn=h2&fp=chrome&type=xhttp&host=x.com&path=%2Fde-xhttp&mode=auto#xhttp&#10;或&#10;vless://uuid@example.com:443?type=ws&security=tls#默认模板"></textarea>
-            <button onclick="generate()">生成节点并获取订阅链接</button>
-          </div>
-          <script>
-            function generate() {
-              const tpl = document.getElementById('tpl').value.trim();
-              if (!tpl.startsWith('vless://')) {
-                alert('请输入正确的 VLESS 节点格式！');
-                return;
-              }
-              window.location.href = '?template=' + encodeURIComponent(tpl);
-            }
-          </script>
-        </body>
-        </html>`;
-      return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    function buildBaseParams() {
+      const params = new URLSearchParams();
+      if (tplEncryption) params.set("encryption", tplEncryption);
+      if (tplSecurity) params.set("security", tplSecurity);
+      if (tplSni) params.set("sni", tplSni);
+      if (tplFp) params.set("fp", tplFp);
+      if (tplType) params.set("type", tplType);
+      if (tplHost) params.set("host", tplHost);
+      if (tplPath) params.set("path", tplPath); // 路径会在这里被自动 URL 编码 (如 / 变成 %2F)
+      
+      // 追加额外参数
+      if (tplExtra) {
+        tplExtra.split('&').forEach(pair => {
+          const [k, v] = pair.split('=');
+          if (k) params.set(k, v);
+        });
+      }
+
+      // 处理强制覆盖参数
+      if (defaultOverride) {
+        defaultOverride.replace(/^[?&]+/, '').split('&').forEach(pair => {
+          const [k, v] = pair.split('=');
+          if (k) params.set(k, v); // 覆盖同名参数
+        });
+      }
+
+      return params.toString();
     }
 
-    // ==========================================
-    // 步骤 3：解析 VLESS 模板 (终极兼容版正则)
-    // ==========================================
-    function parseVless(tpl) {
-      // 核心正则说明：
-      // ((?:\[[^\]]+\])|[^:]+) 表示：
-      // 1. 如果是中括号括起来的IPv6 (如 [2001::1])，整体匹配
-      // 2. 否则匹配到冒号之前的所有内容 (兼容 域名、IPv4、甚至字母"ip")
-      const regex = /^(vless:\/\/[0-9a-f-]+@)((?:\[[^\]]+\])|[^:]+)(:\d+)([?][^#]*)?([#].*)?$/i;
-      const match = tpl.trim().match(regex);
-      if (!match) return null;
-
-      const paramsStr = match[4] || "";
-
-      const typeMatch = paramsStr.match(/[?&]type=([^&#]+)/i);
-      const transportType = typeMatch ? typeMatch[1].toUpperCase() : "未指定";
-
-      return {
-        prefix: match[1],       // vless://uuid@
-        port: match[3],         // :443
-        params: paramsStr,      // ?...各种参数
-        suffix: match[5] || "", // #...节点名
-        transportType
-      };
-    }
-
-    const parsedTemplate = parseVless(template);
-    if (!parsedTemplate) {
-      return new Response("错误：输入的 VLESS 节点格式无法解析，请检查是否缺少端口或格式错乱。", { status: 400 });
-    }
+    const finalParamsStr = buildBaseParams();
+    const tplPrefix = `vless://${tplUuid}@`;
+    const tplMiddle = `:${tplPort}?${finalParamsStr}#`;
 
     // ==========================================
-    // 步骤 4：批量生成新节点
-    // ==========================================
-    const newNodes = extractedData.map(data => {
-      // 智能判断：如果 ADDR 解析出来的是 IPv6，自动补上中括号 []，否则原样拼接
-      const isV6 = data.ip.includes(':');
-      const formattedIp = isV6 ? `[${data.ip}]` : data.ip;
-
-      return `${parsedTemplate.prefix}${formattedIp}${parsedTemplate.port}${parsedTemplate.params}#${data.remark}`;
-    });
-
-    // ==========================================
-    // 步骤 5：Base64 订阅输出
+    // 步骤 3：Base64 订阅输出
     // ==========================================
     if (isSubscribeMode) {
-      const plainText = newNodes.join('\n');
+      const plainText = extractedData.map(data => {
+        const isV6 = data.addr.includes(':');
+        const formattedAddr = isV6 ? `[${data.addr}]` : data.addr;
+        return `${tplPrefix}${formattedAddr}${tplMiddle}${data.remark}`;
+      }).join('\n');
+
       const base64Str = btoa(unescape(encodeURIComponent(plainText)));
       return new Response(base64Str, {
         status: 200,
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-cache, no-store, must-revalidate"
-        },
+        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache" },
       });
     }
 
     // ==========================================
-    // 步骤 6：普通网页输出
+    // 步骤 4：普通网页输出 (配置看板)
     // ==========================================
-    const subscribeLink = `${url.origin}${url.pathname}?template=${encodeURIComponent(template)}&format=base64`;
+    const subscribeLink = `${url.origin}${url.pathname}?format=base64`;
+    
+    // 生成一个示例节点供前端展示
+    const demoAddr = "1.1.1.1";
+    const demoNode = `${tplPrefix}${demoAddr}${tplMiddle}示例节点名称`;
 
-    const tableRows = extractedData.map((data, i) => `
+    const configRows = [
+      ["UUID", tplUuid], ["端口", tplPort], ["SNI", tplSni], 
+      ["HOST", tplHost], ["PATH", tplPath], ["协议", tplType],
+      ["安全", tplSecurity], ["指纹", tplFp], ["加密", tplEncryption], ["额外", tplExtra]
+    ].map(([k, v]) => `
       <tr>
-        <td style="padding: 10px; border: 1px solid #e5e7eb; text-align: center;">${i + 1}</td>
-        <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #dc2626; text-decoration: line-through;">${data.ip}</td>
-        <td style="padding: 10px; border: 1px solid #e5e7eb; font-family: monospace; color: #16a34a; font-weight: bold;">${data.ip.includes(':') ? '[' + data.ip + ']' : data.ip}</td>
-        <td style="padding: 10px; border: 1px solid #e5e7eb;">${data.remark}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;background:#f9fafb;font-weight:bold;width:120px;">${k}</td>
+        <td style="padding:8px;border:1px solid #e5e7eb;font-family:monospace;word-break:break-all;color:#374151;">${v || '<span style="color:#9ca3af">未设置</span>'}</td>
       </tr>
     `).join('');
 
-    const resultHtml = `
+    const html = `
       <!DOCTYPE html>
       <html lang="zh-CN">
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>生成成功</title>
+        <title>VLESS 订阅生成器</title>
         <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; margin: 0; padding: 40px 15px; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; margin: 0; padding: 30px 15px; }
           .container { max-width: 900px; margin: 0 auto; }
-          .card { background: #fff; padding: 25px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); margin-bottom: 20px; }
+          .card { background: #fff; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
           h2 { margin-top: 0; color: #1f2937; }
-          table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-          th { background: #1f2937; color: #fff; padding: 10px; text-align: left; }
-          .protocol-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 14px; font-weight: bold; margin-left: 10px; vertical-align: middle; }
-          .badge-xhttp { background: #fef3c7; color: #92400e; border: 1px solid #fbbf24; }
-          .badge-other { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
-          .sub-box { background: #eff6ff; border: 2px solid #3b82f6; padding: 20px; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap; }
-          .sub-link { flex: 1; word-break: break-all; font-family: monospace; font-size: 13px; color: #1d4ed8; background: #fff; padding: 10px; border-radius: 4px; border: 1px solid #bfdbfe; user-select: all; }
-          .copy-btn { background: #3b82f6; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; white-space: nowrap; }
+          .success-box { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 15px; }
+          .sub-box { background: #eff6ff; border: 2px solid #3b82f6; padding: 20px; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; gap: 15px; flex-wrap: wrap; margin-bottom: 20px;}
+          .sub-link { flex: 1; word-break: break-all; font-family: monospace; font-size: 14px; color: #1d4ed8; background: #fff; padding: 12px; border-radius: 4px; border: 1px solid #bfdbfe; user-select: all; }
+          .copy-btn { background: #3b82f6; color: #fff; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-weight: bold; white-space: nowrap; font-size: 15px;}
           .copy-btn:hover { background: #2563eb; }
-          .back-link { display: inline-block; margin-top: 15px; color: #6b7280; text-decoration: none; }
-          .back-link:hover { color: #111827; }
+          table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+          pre { background: #1f2937; color: #f8fafc; padding: 15px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin: 15px 0 0 0; }
         </style>
       </head>
       <body>
         <div class="container">
-          <div class="card">
-            <h2>
-              ✅ 成功生成 ${newNodes.length} 个新节点
-              <span class="protocol-badge ${parsedTemplate.transportType === 'XHTTP' ? 'badge-xhttp' : 'badge-other'}">
-                当前协议：${parsedTemplate.transportType}
-              </span>
-            </h2>
-            <table>
-              <thead>
-                <tr>
-                  <th style="width: 50px;">#</th>
-                  <th>模板原 IP</th>
-                  <th>替换为新 IP</th>
-                  <th>新节点名称</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${tableRows}
-              </tbody>
-            </table>
-            <a href="?" class="back-link">← 返回重新生成</a>
+          <div class="success-box">
+            ✅ <strong>运行正常：</strong>已从 ADDR 成功解析出 <strong>${extractedData.length}</strong> 条有效记录。模板变量已加载完毕。
           </div>
-          
+
           <div class="card">
-            <h2>📥 Base64 订阅链接</h2>
-            <p style="color:#6b7280; font-size:14px; margin-bottom:15px;">请将下方链接复制到您的代理客户端中订阅：</p>
+            <h2>📥 一键订阅链接</h2>
+            <p style="color:#6b7280;font-size:14px;">直接将此链接填入客户端即可，无需任何手动传参：</p>
             <div class="sub-box">
               <div class="sub-link" id="subLink">${subscribeLink}</div>
               <button class="copy-btn" onclick="copyLink()">一键复制</button>
             </div>
+          </div>
+
+          <div class="card">
+            <h2>⚙️ 当前生效的模板变量</h2>
+            <table>${configRows}</table>
+            ${defaultOverride ? `<div style="margin-top:15px;color:#dc2626;font-weight:bold;">⚠️ 检测到 DEFAULT_PARAMS 覆盖变量：${defaultOverride}</div>` : ''}
+          </div>
+
+          <div class="card">
+            <h2>🧩 拼装效果预览</h2>
+            <p style="color:#6b7280;font-size:14px;">基于上述变量，底层实际生成的节点结构如下：</p>
+            <pre>${escapeHtml(demoNode)}</pre>
           </div>
         </div>
         <script>
@@ -233,17 +185,17 @@ export default {
               btn.innerText = '已复制!';
               btn.style.background = '#16a34a';
               setTimeout(() => { btn.innerText = '一键复制'; btn.style.background = '#3b82f6'; }, 2000);
-            }).catch(err => {
-              const textarea = document.createElement('textarea');
-              textarea.value = text; document.body.appendChild(textarea);
-              textarea.select(); document.execCommand('copy'); document.body.removeChild(textarea);
-              alert('已复制到剪贴板');
-            });
+            }).catch(() => alert('已复制'));
           }
         </script>
       </body>
       </html>`;
 
-    return new Response(resultHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
   },
 };
+
+function escapeHtml(text) {
+  if (!text) return "";
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
