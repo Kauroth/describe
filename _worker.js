@@ -35,19 +35,19 @@ export default {
     // 分享链接不依赖 ADDR，先处理
     if (q.has('share')) return handleShare(q);
 
-    const sources = parseSources(env && env.ADDR);
+    const sources = collectSources(env);
 
     if (q.get('sources') === '1') {
-      if (!sources.length) return plain('错误：环境变量 ADDR 未配置或格式不正确。', 500);
+      if (!sources.length) return plain('错误：没有可用的源。配 ADDR，或把每条源单独放一个环境变量。', 500);
       return json({
         success: true,
         count: sources.length,
-        sources: sources.map((s, i) => ({ index: i, name: s.name, urls: s.urls }))
+        sources: sources.map((s, i) => ({ index: i, name: s.name, from: s.from || '', urls: s.urls }))
       });
     }
 
     if (q.get('probe') === '1') {
-      if (!sources.length) return plain('错误：环境变量 ADDR 未配置或格式不正确。', 500);
+      if (!sources.length) return plain('错误：没有可用的源。配 ADDR，或把每条源单独放一个环境变量。', 500);
       const rows = await Promise.all(sources.map(async (src, idx) => {
         const attempts = [];
         for (const u of src.urls) {
@@ -85,7 +85,7 @@ async function handleTemplate(q, sources, url) {
   if (!info) {
     return plain('错误：模板节点无法解析。支持 vless:// vmess:// trojan:// ss:// hysteria2://', 400);
   }
-  if (!sources.length) return plain('错误：环境变量 ADDR 未配置或格式不正确。', 500);
+  if (!sources.length) return plain('错误：没有可用的源。配 ADDR，或把每条源单独放一个环境变量。', 500);
 
   const subLink = (idx) =>
     `${url.origin}${url.pathname}?source=${idx}&template=${encodeURIComponent(template)}&format=base64`;
@@ -218,6 +218,32 @@ function repairGlued(text) {
   if (/\r|\n/.test(src)) return src;
   if ((src.match(/\|/g) || []).length < 2) return src;
   return src.replace(/([\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+)\|/g, '\n$1|');
+}
+
+// 源从哪来：
+//   1. ADDR 有值就以 ADDR 为准（一条也能写多个源，见上面三种单行写法）
+//   2. ADDR 空就收集环境里所有「名称|http…」形式的变量（CMCC / CTCC / MANUAL 这种），
+//      按变量名排序后依次当作源。单行框里一条源一个变量，最省事，也不用管换行。
+function collectSources(env) {
+  const addr = env && env.ADDR;
+  if (addr && String(addr).trim()) {
+    return parseSources(addr).map(s => ({ ...s, from: 'ADDR' }));
+  }
+
+  const keys = Object.keys(env || {})
+    .filter(k => typeof env[k] === 'string')
+    .sort();
+
+  const picked = [];
+  for (const key of keys) {
+    const value = String(env[key]).trim();
+    if (!value || !/https?:\/\//i.test(value)) continue;
+    picked.push({ key, value });
+  }
+  if (!picked.length) return [];
+
+  return parseSources(picked.map(p => p.value).join('\n'))
+    .map((s, i) => ({ ...s, from: picked[i] ? picked[i].key : 'env' }));
 }
 
 function parseSources(addrStr) {
@@ -523,10 +549,10 @@ function subResponse(body, type = 'text/plain; charset=utf-8') {
 function renderPage(sources) {
   const sourceList = sources.length
     ? sources.map((s, i) => `${i}. ${s.name}`).join('　')
-    : 'ADDR 未配置';
+    : '没有可用的源';
   const addrWarn = sources.length
     ? ''
-    : '<div class="warn">环境变量 ADDR 为空，批量优选不可用。编辑器不依赖 ADDR，可以正常用。</div>';
+    : '<div class="warn">没读到任何优选源：配 ADDR，或者把每条源单独放一个环境变量（值写成「名称|https://…」）。编辑器不依赖源，可以正常用。</div>';
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">

@@ -89,7 +89,7 @@ ok('候选地址 2 条', srcJson.sources[0].urls.length === 2);
 line('2b) ADDR 为空时页面仍可打开');
 r = await worker.fetch(new Request(base), {}).then(x => x.text());
 ok('无 ADDR 也出页面', r.includes('节点编辑器'));
-ok('无 ADDR 有提示', r.includes('ADDR 为空'));
+ok('无源时有提示', r.includes('没读到任何优选源'));
 const r2 = await worker.fetch(new Request(base + '?sources=1'), {});
 ok('无 ADDR 时 ?sources=1 报 500', r2.status === 500, String(r2.status));
 
@@ -118,6 +118,27 @@ for (const [label, addr, want] of [
   const dd = JSON.parse(await rr.text());
   ok(label, dd.count === want, String(dd.count));
 }
+
+// ============ 2e. 每条源单独一个变量 ============
+line('2e) 不用 ADDR，一个源一个环境变量');
+const splitEnv = {
+  CMCC: '移动优选|https://pool.test/cmcc.txt',
+  CTCC: '电信优选|https://pool.test/ctcc.txt',
+  MANUAL: '手动优选|https://pool.test/cmcc.txt',
+  ASSETS: {},
+  CF_PAGES_BRANCH: 'main',
+  TZ: 'Asia/Shanghai'
+};
+r = await worker.fetch(new Request(base + '?sources=1'), splitEnv);
+const se = JSON.parse(await r.text());
+ok('读到 3 个源', se.count === 3, String(se.count));
+ok('名字取自值里的前缀', se.sources.map(x => x.name).join(',') === '移动优选,电信优选,手动优选');
+ok('来源标成变量名', se.sources.map(x => x.from).join(',') === 'CMCC,CTCC,MANUAL');
+ok('非 URL 变量被忽略', se.count === 3);
+const addrFirst = JSON.parse(await (await worker.fetch(new Request(base + '?sources=1'), { ADDR: '甲|https://a.test/x.txt', CMCC: '移动优选|https://b.test/y.txt' })).text());
+ok('ADDR 有值时优先', addrFirst.count === 1 && addrFirst.sources[0].name === '甲');
+const sub = await worker.fetch(new Request(base + '?source=1&format=base64&template=' + encodeURIComponent(VLESS_TPL)), splitEnv);
+ok('变量模式下订阅正常', sub.status === 200 && Buffer.from(await sub.text(), 'base64').toString('utf8').includes('104.19.1.1'));
 
 // ============ 3. probe ============
 line('3) ?probe=1 候选回退');
