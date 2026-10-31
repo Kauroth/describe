@@ -224,6 +224,17 @@ function repairGlued(text) {
 //   1. ADDR 有值就以 ADDR 为准（一条也能写多个源，见上面三种单行写法）
 //   2. ADDR 空就收集环境里所有「名称|http…」形式的变量（CMCC / CTCC / MANUAL 这种），
 //      按变量名排序后依次当作源。单行框里一条源一个变量，最省事，也不用管换行。
+// CF 会往 env 里塞一堆自带变量，其中 CF_PAGES_URL 的值就是本站地址，
+// 光看「有没有 http」会把它也当成源，拉回来一整页 HTML，还把序号整体推后一位。
+// 这里的规矩：系统变量名前缀一律跳过；值要么是「名称|地址」，要么是列表类文件后缀的裸链接。
+const SYSTEM_KEY = /^(CF_|NODE_|NPM_|ASSETS$|ADDR$|PATH$|HOME$|LANG$|TZ$|PWD$|SHELL$|USER$)/;
+
+function looksLikeSource(value) {
+  if (!/https?:\/\//i.test(value)) return false;
+  if (value.includes('|')) return true;
+  return /\.(txt|list|yaml|yml|csv|conf)(\?|#|$)/i.test(value);
+}
+
 function collectSources(env) {
   const addr = env && env.ADDR;
   if (addr && String(addr).trim()) {
@@ -237,7 +248,9 @@ function collectSources(env) {
   const picked = [];
   for (const key of keys) {
     const value = String(env[key]).trim();
-    if (!value || !/https?:\/\//i.test(value)) continue;
+    if (!value) continue;
+    if (SYSTEM_KEY.test(key)) continue;
+    if (!looksLikeSource(value)) continue;
     picked.push({ key, value });
   }
   if (!picked.length) return [];

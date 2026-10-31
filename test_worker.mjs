@@ -127,6 +127,8 @@ const splitEnv = {
   MANUAL: '手动优选|https://pool.test/cmcc.txt',
   ASSETS: {},
   CF_PAGES_BRANCH: 'main',
+  CF_PAGES_URL: 'https://abc.describe.pages.dev',
+  CF_PAGES_COMMIT_SHA: 'deadbeef',
   TZ: 'Asia/Shanghai'
 };
 r = await worker.fetch(new Request(base + '?sources=1'), splitEnv);
@@ -134,7 +136,12 @@ const se = JSON.parse(await r.text());
 ok('读到 3 个源', se.count === 3, String(se.count));
 ok('名字取自值里的前缀', se.sources.map(x => x.name).join(',') === '移动优选,电信优选,手动优选');
 ok('来源标成变量名', se.sources.map(x => x.from).join(',') === 'CMCC,CTCC,MANUAL');
-ok('非 URL 变量被忽略', se.count === 3);
+ok('CF_PAGES_URL 不被当成源', se.count === 3, JSON.stringify(se.sources.map(x => x.from)));
+ok('序号从 0 开始不乱', se.sources.map(x => x.index).join(',') === '0,1,2');
+const bare = JSON.parse(await (await worker.fetch(new Request(base + '?sources=1'), {
+  A: 'https://a.test/list.txt', B: 'https://b.test/site.html', C: 'not a url'
+})).text());
+ok('裸链接只收列表类后缀', bare.count === 1 && bare.sources[0].urls[0].endsWith('list.txt'), String(bare.count));
 const addrFirst = JSON.parse(await (await worker.fetch(new Request(base + '?sources=1'), { ADDR: '甲|https://a.test/x.txt', CMCC: '移动优选|https://b.test/y.txt' })).text());
 ok('ADDR 有值时优先', addrFirst.count === 1 && addrFirst.sources[0].name === '甲');
 const sub = await worker.fetch(new Request(base + '?source=1&format=base64&template=' + encodeURIComponent(VLESS_TPL)), splitEnv);
