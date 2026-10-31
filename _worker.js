@@ -200,8 +200,20 @@ function handleShare(q) {
 // 保留原功能的辅助
 // ==========================================
 
+// Cloudflare 后台的变量输入框偶尔把换行吃掉，几个源会粘成一整行：
+//   移动优选|https://a.txt电信优选|https://b.txt
+// 结果被当成一条源、一个畸形 URL，拉取直接 404。
+// 只在「整段一个换行都没有」且「至少两个 |」时才猜，且在「中文名 + |」处断行，
+// 不会去动 URL 里的 ASCII。ASCII 源名粘一起的情况仍然猜不出来，只能改配置。
+function repairGlued(text) {
+  const src = String(text || '');
+  if (/\r|\n/.test(src)) return src;
+  if ((src.match(/\|/g) || []).length < 2) return src;
+  return src.replace(/([\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+)\|/g, '\n$1|');
+}
+
 function parseSources(addrStr) {
-  return String(addrStr || '').split(/\r?\n/).map((item, idx) => {
+  return repairGlued(addrStr).split(/\r?\n/).map((item, idx) => {
     const trimmed = item.trim();
     if (!trimmed) return null;
     if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith(';')) return null;

@@ -93,6 +93,20 @@ ok('无 ADDR 有提示', r.includes('ADDR 为空'));
 const r2 = await worker.fetch(new Request(base + '?sources=1'), {});
 ok('无 ADDR 时 ?sources=1 报 500', r2.status === 500, String(r2.status));
 
+// ============ 2c. ADDR 换行被吃掉 ============
+line('2c) 换行被吃掉时自动补回');
+const GLUED = '移动优选|https://raw.githubusercontent.com/DustinWin/BestCF/refs/heads/bestcf/cmcc-ip.txt' +
+  '电信优选|https://raw.githubusercontent.com/DustinWin/BestCF/refs/heads/bestcf/ctcc-ip.txt' +
+  '手动优选|https://text.example.com/nb_cmcc.txt?token=x';
+r = await worker.fetch(new Request(base + '?sources=1'), { ADDR: GLUED });
+const glued = JSON.parse(await r.text());
+ok('拆回 3 个源', glued.count === 3, String(glued.count));
+ok('源名正确', glued.sources.map(s => s.name).join(',') === '移动优选,电信优选,手动优选', JSON.stringify(glued.sources.map(s => s.name)));
+ok('URL 没被污染', glued.sources[0].urls[0].endsWith('cmcc-ip.txt'), glued.sources[0].urls[0]);
+const plain2 = await worker.fetch(new Request(base + '?sources=1'), { ADDR: 'A|https://a.test/x.txt\nB|https://b.test/y.txt,https://b.test/z.txt' });
+const p2 = JSON.parse(await plain2.text());
+ok('正常多行不受影响', p2.count === 2 && p2.sources[1].urls.length === 2);
+
 // ============ 3. probe ============
 line('3) ?probe=1 候选回退');
 r = await call(base + '?probe=1');
