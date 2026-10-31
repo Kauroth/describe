@@ -200,6 +200,17 @@ for (const [name, tpl, check] of [
   ok(`${name} 换址正确`, rr.status === 200 && check(firstNode), firstNode.slice(0, 110));
 }
 
+// ============ 6b. xhttp 的 extra 不能被吃掉 ============
+line('6b) xhttp 扩展参数透传');
+const XHTTP_TPL = 'vless://ca7428e0-8e96-4a55-b1fe-118773809060@1panel.kauroth.top:443?encryption=none&security=tls&sni=1panel.kauroth.top&fp=chrome&alpn=h2&insecure=0&allowInsecure=0&type=xhttp&host=1panel.kauroth.top&path=%2Fde-xhttp&mode=stream-one&extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A2%2C%22cMaxReuseTimes%22%3A4%2C%22hMaxRequestTimes%22%3A20%2C%22hKeepAlivePeriod%22%3A15%7D%7D#DE';
+r = await call(base + '?source=0&format=plain&template=' + encodeURIComponent(XHTTP_TPL));
+const xn = r.text.split('\n')[0];
+ok('extra 保留', xn.includes('extra=%7B%22xmux%22%3A%7B%22maxConcurrency%22%3A2'), xn.slice(0, 160));
+ok('mode 保留', xn.includes('mode=stream-one'));
+ok('insecure 两个都保留', xn.includes('insecure=0') && xn.includes('allowInsecure=0'));
+ok('fp / alpn 保留', xn.includes('fp=chrome') && xn.includes('alpn=h2'));
+ok('路径与 host 未变', xn.includes('path=%2Fde-xhttp') && xn.includes('host=1panel.kauroth.top'));
+
 // ============ 7. all=true ============
 line('7) ?all=true');
 r = await call(base + '?all=true&template=' + encodeURIComponent(VLESS_TPL));

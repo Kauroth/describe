@@ -773,8 +773,11 @@ function renderPage(sources) {
         { k: 'flow', l: 'Flow', opts: ['', 'xtls-rprx-vision'] },
         { k: 'serviceName', l: 'gRPC 服务名', ph: 'grpc' },
         { k: 'mode', l: 'mode', opts: ['', 'auto', 'packet-up', 'stream-up', 'stream-one', 'gun', 'multi'] },
+        { k: 'insecure', l: '跳过证书校验 insecure', opts: ['', '0', '1'] },
+        { k: 'allowInsecure', l: 'allowInsecure', opts: ['', '0', '1'] },
         { k: 'pbk', l: 'Reality 公钥', ph: '' },
-        { k: 'sid', l: 'Reality ShortId', ph: '' }
+        { k: 'sid', l: 'Reality ShortId', ph: '' },
+        { k: 'extra', l: 'xhttp extra（JSON，可留空）', ph: '{"xmux":{"maxConcurrency":2,"cMaxReuseTimes":4,"hMaxRequestTimes":20,"hKeepAlivePeriod":15}}', w: 2 }
       ]
     },
     vmess: {
@@ -809,7 +812,8 @@ function renderPage(sources) {
         { k: 'fp', l: '指纹 fp', opts: ['', 'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'] },
         { k: 'alpn', l: 'ALPN', ph: 'h2,http/1.1' },
         { k: 'serviceName', l: 'gRPC 服务名', ph: 'grpc' },
-        { k: 'allowInsecure', l: '允许不安全证书', opts: ['', '1'] }
+        { k: 'allowInsecure', l: '允许不安全证书', opts: ['', '1'] },
+        { k: 'extra', l: 'extra（JSON，可留空）', ph: '', w: 2 }
       ]
     },
     ss: {
@@ -845,6 +849,15 @@ function renderPage(sources) {
     trojan: { security: 'tls', net: 'tcp' },
     ss: { method: 'aes-256-gcm' },
     hysteria2: { alpn: 'h3' }
+  };
+
+  // 各协议自己认得的 query 参数。不在这张表里的一律透传，粘贴解析时不会丢。
+  var KNOWN = {
+    vless: ['encryption', 'security', 'sni', 'fp', 'alpn', 'pbk', 'sid', 'type', 'host', 'path', 'serviceName', 'flow', 'mode', 'insecure', 'allowInsecure', 'extra'],
+    trojan: ['security', 'sni', 'fp', 'alpn', 'type', 'host', 'path', 'serviceName', 'allowInsecure', 'insecure', 'extra'],
+    ss: ['plugin'],
+    hysteria2: ['sni', 'insecure', 'obfs', 'obfs-password', 'alpn'],
+    vmess: []
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -898,14 +911,34 @@ function renderPage(sources) {
     var n = tr(name).replace(/[\\r\\n]+/g, ' ').replace(/#/g, '%23');
     return n ? '#' + n : '';
   }
-  function qs(pairs) {
-    var out = [];
+  function qsE(pairs, extras) {
+    var out = [], seen = {};
     for (var i = 0; i < pairs.length; i++) {
       var k = pairs[i][0], v = pairs[i][1];
       if (v === undefined || v === null || v === '') continue;
+      if (seen[k]) continue;
+      seen[k] = 1;
       out.push(k + '=' + encodeURIComponent(v));
     }
+    if (extras) {
+      var ks = Object.keys(extras);
+      for (var j = 0; j < ks.length; j++) {
+        var ek = ks[j], ev = extras[ek];
+        if (seen[ek] || ev === undefined || ev === null || ev === '') continue;
+        out.push(ek + '=' + encodeURIComponent(ev));
+      }
+    }
     return out.length ? '?' + out.join('&') : '';
+  }
+
+  // 不在白名单里的参数原样带走，避免粘贴解析把 xhttp 的 extra、tuic 的 udp 之类吃掉
+  function pickExtras(query, known) {
+    var p = readParams(query), out = {};
+    var keys = Object.keys(p);
+    for (var i = 0; i < keys.length; i++) {
+      if (known.indexOf(keys[i]) === -1) out[keys[i]] = p[keys[i]];
+    }
+    return out;
   }
   function splitUri(uri) {
     var raw = tr(uri);
@@ -946,7 +979,7 @@ function renderPage(sources) {
 
   // ---------------- 构建 ----------------
   function buildVless(s) {
-    var q = qs([
+    var q = qsE([
       ['encryption', 'none'],
       ['security', s.security],
       ['sni', tr(s.sni)],
@@ -959,8 +992,11 @@ function renderPage(sources) {
       ['path', tr(s.path)],
       ['serviceName', tr(s.serviceName)],
       ['flow', s.flow],
-      ['mode', s.mode]
-    ]);
+      ['mode', s.mode],
+      ['insecure', s.insecure],
+      ['allowInsecure', s.allowInsecure],
+      ['extra', tr(s.extra)]
+    ], s._extras);
     return 'vless://' + tr(s.uuid) + '@' + hostPort(s) + q + hashOf(s.name);
   }
 
@@ -987,7 +1023,7 @@ function renderPage(sources) {
   }
 
   function buildTrojan(s) {
-    var q = qs([
+    var q = qsE([
       ['security', s.security],
       ['sni', tr(s.sni)],
       ['fp', s.fp],
@@ -996,8 +1032,10 @@ function renderPage(sources) {
       ['host', tr(s.host)],
       ['path', tr(s.path)],
       ['serviceName', tr(s.serviceName)],
-      ['allowInsecure', s.allowInsecure]
-    ]);
+      ['allowInsecure', s.allowInsecure],
+      ['insecure', s.insecure],
+      ['extra', tr(s.extra)]
+    ], s._extras);
     return 'trojan://' + encodeURIComponent(tr(s.password)) + '@' + hostPort(s) + q + hashOf(s.name);
   }
 
@@ -1008,13 +1046,13 @@ function renderPage(sources) {
   }
 
   function buildHysteria2(s) {
-    var q = qs([
+    var q = qsE([
       ['sni', tr(s.sni)],
       ['insecure', s.insecure],
       ['obfs', s.obfs],
       ['obfs-password', tr(s['obfs-password'])],
       ['alpn', tr(s.alpn)]
-    ]);
+    ], s._extras);
     return 'hysteria2://' + encodeURIComponent(tr(s.password)) + '@' + hostPort(s) + '/' + q + hashOf(s.name);
   }
 
@@ -1077,6 +1115,8 @@ function renderPage(sources) {
     var p = readParams(u.query);
     var out = { name: dec(u.hash), addr: u.host, port: u.port };
 
+    out._extras = pickExtras(u.query, KNOWN[proto] || []);
+
     if (proto === 'vless') {
       out.uuid = u.user;
       out.security = p.security || '';
@@ -1091,6 +1131,9 @@ function renderPage(sources) {
       out.mode = p.mode || '';
       out.pbk = p.pbk || '';
       out.sid = p.sid || '';
+      out.insecure = p.insecure || '';
+      out.allowInsecure = p.allowInsecure || '';
+      out.extra = p.extra || '';
     } else if (proto === 'trojan') {
       out.password = dec(u.user);
       out.security = p.security || '';
@@ -1102,6 +1145,8 @@ function renderPage(sources) {
       out.alpn = p.alpn || '';
       out.serviceName = p.serviceName || '';
       out.allowInsecure = p.allowInsecure || '';
+      out.insecure = p.insecure || '';
+      out.extra = p.extra || '';
     } else if (proto === 'hysteria2') {
       out.password = dec(u.user);
       out.sni = p.sni || '';
@@ -1168,7 +1213,10 @@ function renderPage(sources) {
   function fillState(data) {
     var keys = Object.keys(data);
     for (var i = 0; i < keys.length; i++) {
-      if (data[keys[i]] !== undefined && data[keys[i]] !== null) state[keys[i]] = String(data[keys[i]]);
+      var k = keys[i], v = data[k];
+      if (v === undefined || v === null) continue;
+      if (k.charAt(0) === '_') { state[k] = v; continue; }
+      state[k] = String(v);
     }
   }
 
@@ -1188,6 +1236,10 @@ function renderPage(sources) {
 
     var meta = uri.length + ' 字符';
     if (missing.length) meta += ' · 还差 ' + missing.join('、');
+    if (tr(state.extra)) {
+      try { JSON.parse(tr(state.extra)); }
+      catch (e) { meta += ' · extra 不是合法 JSON'; }
+    }
     metaEl.textContent = meta;
     metaEl.className = 'meta' + (missing.length ? ' bad' : '');
 
