@@ -674,7 +674,6 @@ function renderPage(sources) {
     font-size: 11.5px; font-weight: 700; color: #a3abb9; letter-spacing: .08em;
     margin-bottom: 10px;
   }
-  .fld.hide { display: none !important; }
   details.adv > summary {
     cursor: pointer; font-size: 12.5px; font-weight: 600; color: #7a8393;
     list-style: none; padding: 2px 0; user-select: none;
@@ -1249,7 +1248,40 @@ function renderPage(sources) {
     return html + '</div>';
   }
 
-  function renderForm() {
+  // 哪些字段是别人的显示条件，改了它们就要重画表单
+  var DEP_CACHE = {};
+  function depsOf(proto) {
+    if (DEP_CACHE[proto]) return DEP_CACHE[proto];
+    var keys = {};
+    var p = SCHEMA[proto];
+    for (var i = 0; i < p.fields.length; i++) {
+      var show = p.fields[i].show;
+      if (!show) continue;
+      var ks = Object.keys(show);
+      for (var j = 0; j < ks.length; j++) keys[ks[j]] = 1;
+    }
+    DEP_CACHE[proto] = keys;
+    return keys;
+  }
+
+  function bindFields() {
+    var els = formEl.querySelectorAll('[data-k]');
+    for (var n = 0; n < els.length; n++) {
+      (function (el) {
+        var k = el.getAttribute('data-k');
+        var handler = function () {
+          state[k] = el.value;
+          // 只在这类「决定别人显不显示」的字段变化时才重画，避免打字时丢焦点
+          if (depsOf(protoSel.value)[k]) renderForm(k);
+          update();
+        };
+        el.addEventListener('input', handler);
+        el.addEventListener('change', handler);
+      })(els[n]);
+    }
+  }
+
+  function renderForm(focusKey) {
     var proto = protoSel.value;
     var p = SCHEMA[proto];
     var def = DEFAULTS[proto] || {};
@@ -1257,6 +1289,7 @@ function renderPage(sources) {
 
     for (var i = 0; i < p.fields.length; i++) {
       var f = p.fields[i];
+      if (!shown(f)) continue;          // 不适用的字段根本不存在
       var h = fieldHtml(f, def);
       if (f.g === 'net') net.push(h);
       else if (f.g === 'adv') adv.push(h);
@@ -1272,15 +1305,11 @@ function renderPage(sources) {
     }
 
     formEl.innerHTML = html;
+    bindFields();
 
-    var els = formEl.querySelectorAll('[data-k]');
-    for (var n = 0; n < els.length; n++) {
-      (function (el) {
-        var k = el.getAttribute('data-k');
-        var handler = function () { state[k] = el.value; update(); };
-        el.addEventListener('input', handler);
-        el.addEventListener('change', handler);
-      })(els[n]);
+    if (focusKey) {
+      var target = formEl.querySelector('[data-k="' + focusKey + '"]');
+      if (target) target.focus();
     }
   }
 
@@ -1299,16 +1328,6 @@ function renderPage(sources) {
     var proto = protoSel.value;
     var p = SCHEMA[proto];
     var s = activeState();
-
-    // 先按显示条件收起不适用的框
-    for (var i = 0; i < p.fields.length; i++) {
-      var f = p.fields[i];
-      var wrap = formEl.querySelector('[data-fld="' + f.k + '"]');
-      if (wrap) {
-        if (shown(f)) wrap.classList.remove('hide');
-        else wrap.classList.add('hide');
-      }
-    }
 
     var missing = [];
     for (var j = 0; j < p.fields.length; j++) {
