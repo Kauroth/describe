@@ -11,7 +11,12 @@
 
 - **节点编辑**：选协议 → 填地址、端口、UUID、Host、SNI、Path 等 → 下方实时显示链接。
   也可以把现成节点粘进输入框点「解析」，协议和字段自动对齐。
-  xhttp 的 `extra`（xmux 那串 JSON）、`insecure`、`allowInsecure` 都有专字段；
+- **字段跟着协议变**：每种协议只显示自己有的项。传输方式选 tcp 时不出现 `path`/`host`，
+  选 xhttp 才出现 `mode`/`extra`，`security` 选 reality 才出现 `pbk`/`sid`，
+  gRPC 才有 `serviceName`，hysteria2 开了 salamander 才有混淆密码。
+  不显示的字段不进链接，但值会留着，切回来还在。
+- 表单分三块：基本信息 / 传输与伪装 / 高级参数（默认折叠，解析到高级参数时自动展开）。
+- xhttp 的 `extra`（xmux 那串 JSON）、`insecure`、`allowInsecure` 都有专字段；
   不认识的参数也不会丢——解析时原样透传，改地址改端口它们跟着走。
 - **生成分享链接**：把当前节点编码进 `?share=`，得到一条能直接导入客户端的订阅地址。
   不依赖任何服务端配置，生成后随参数自动更新。

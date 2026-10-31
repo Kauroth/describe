@@ -661,12 +661,29 @@ function renderPage(sources) {
     font-size: 11.5px; color: #2c5cd6; overflow-wrap: anywhere; user-select: all;
   }
   .err-text { font-size: 12.5px; color: #b42318; background: #fef2f2; padding: 11px 13px; border-radius: 9px; overflow-wrap: anywhere; }
-  details { margin-top: 11px; }
-  summary { cursor: pointer; font-size: 12.5px; color: #7a8393; list-style: none; padding: 6px 0; user-select: none; }
-  summary::-webkit-details-marker { display: none; }
-  summary::before { content: "▸ "; }
-  details[open] summary::before { content: "▾ "; }
-  summary:hover { color: #2f6bff; }
+  #results details { margin-top: 11px; }
+  #results summary { cursor: pointer; font-size: 12.5px; color: #7a8393; list-style: none; padding: 6px 0; user-select: none; }
+  #results summary::-webkit-details-marker { display: none; }
+  #results summary::before { content: "▸ "; }
+  #results details[open] summary::before { content: "▾ "; }
+  #results summary:hover { color: #2f6bff; }
+
+  .grp { margin-bottom: 16px; }
+  .grp:last-child { margin-bottom: 0; }
+  .grp-t {
+    font-size: 11.5px; font-weight: 700; color: #a3abb9; letter-spacing: .08em;
+    margin-bottom: 10px;
+  }
+  .fld.hide { display: none !important; }
+  details.adv > summary {
+    cursor: pointer; font-size: 12.5px; font-weight: 600; color: #7a8393;
+    list-style: none; padding: 2px 0; user-select: none;
+  }
+  details.adv > summary::-webkit-details-marker { display: none; }
+  details.adv > summary::before { content: "▸ "; }
+  details.adv[open] > summary::before { content: "▾ "; }
+  details.adv > summary:hover { color: #2f6bff; }
+  details.adv[open] > summary { margin-bottom: 12px; }
   .nodes { margin-top: 6px; border: 1px solid #eef1f6; border-radius: 9px; overflow: hidden; }
   .node {
     padding: 8px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -712,7 +729,7 @@ function renderPage(sources) {
     </div>
 
     <div class="card">
-      <div class="grid" id="form"></div>
+      <div id="form"></div>
     </div>
 
     <div class="card">
@@ -755,6 +772,10 @@ function renderPage(sources) {
   'use strict';
 
   // ---------------- 协议定义 ----------------
+  // 字段描述：
+  //   g    分组：base 基本信息 / net 传输与伪装 / adv 高级（默认折叠）
+  //   show 显示条件：{ 字段: [允许的值...] }，全部满足才显示
+  //   隐藏的字段不进链接，值仍留在 state 里，切回来还在
   var SCHEMA = {
     vless: {
       label: 'VLESS',
@@ -763,21 +784,23 @@ function renderPage(sources) {
         { k: 'addr', l: '地址 / IP', ph: '104.17.151.9', req: 1 },
         { k: 'port', l: '端口', ph: '443', req: 1 },
         { k: 'uuid', l: 'UUID', ph: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', w: 2, req: 1 },
-        { k: 'security', l: '传输安全', opts: ['tls', 'reality', 'none'] },
-        { k: 'net', l: '传输方式', opts: ['tcp', 'ws', 'grpc', 'xhttp', 'httpupgrade', 'h2'] },
-        { k: 'sni', l: 'SNI', ph: 'example.com' },
-        { k: 'host', l: 'Host', ph: 'example.com' },
-        { k: 'path', l: 'Path', ph: '/ws' },
-        { k: 'fp', l: '指纹 fp', opts: ['', 'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'] },
-        { k: 'alpn', l: 'ALPN', ph: 'h2,http/1.1' },
-        { k: 'flow', l: 'Flow', opts: ['', 'xtls-rprx-vision'] },
-        { k: 'serviceName', l: 'gRPC 服务名', ph: 'grpc' },
-        { k: 'mode', l: 'mode', opts: ['', 'auto', 'packet-up', 'stream-up', 'stream-one', 'gun', 'multi'] },
-        { k: 'insecure', l: '跳过证书校验 insecure', opts: ['', '0', '1'] },
-        { k: 'allowInsecure', l: 'allowInsecure', opts: ['', '0', '1'] },
-        { k: 'pbk', l: 'Reality 公钥', ph: '' },
-        { k: 'sid', l: 'Reality ShortId', ph: '' },
-        { k: 'extra', l: 'xhttp extra（JSON，可留空）', ph: '{"xmux":{"maxConcurrency":2,"cMaxReuseTimes":4,"hMaxRequestTimes":20,"hKeepAlivePeriod":15}}', w: 2 }
+
+        { k: 'security', l: '传输安全', g: 'net', opts: ['tls', 'reality', 'none'] },
+        { k: 'net', l: '传输方式', g: 'net', opts: ['tcp', 'ws', 'grpc', 'xhttp', 'httpupgrade', 'h2'] },
+        { k: 'sni', l: 'SNI', g: 'net', ph: 'example.com', show: { security: ['tls', 'reality'] } },
+        { k: 'fp', l: '指纹 fp', g: 'net', opts: ['', 'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'], show: { security: ['tls', 'reality'] } },
+        { k: 'alpn', l: 'ALPN', g: 'net', ph: 'h2,http/1.1', show: { security: ['tls', 'reality'] } },
+        { k: 'host', l: 'Host', g: 'net', ph: 'example.com', show: { net: ['ws', 'xhttp', 'httpupgrade', 'h2'] } },
+        { k: 'path', l: 'Path', g: 'net', ph: '/ws', show: { net: ['ws', 'xhttp', 'httpupgrade', 'h2'] } },
+
+        { k: 'flow', l: 'Flow', g: 'adv', opts: ['', 'xtls-rprx-vision'], show: { net: ['tcp'], security: ['tls', 'reality'] } },
+        { k: 'serviceName', l: 'gRPC 服务名', g: 'adv', ph: 'grpc', show: { net: ['grpc'] } },
+        { k: 'mode', l: 'mode', g: 'adv', opts: ['', 'auto', 'packet-up', 'stream-up', 'stream-one', 'gun', 'multi'], show: { net: ['xhttp', 'grpc'] } },
+        { k: 'pbk', l: 'Reality 公钥', g: 'adv', ph: '', show: { security: ['reality'] } },
+        { k: 'sid', l: 'Reality ShortId', g: 'adv', ph: '', show: { security: ['reality'] } },
+        { k: 'insecure', l: 'insecure', g: 'adv', opts: ['', '0', '1'], show: { security: ['tls', 'reality'] } },
+        { k: 'allowInsecure', l: 'allowInsecure', g: 'adv', opts: ['', '0', '1'], show: { security: ['tls', 'reality'] } },
+        { k: 'extra', l: 'xhttp extra（JSON）', g: 'adv', ph: '{"xmux":{"maxConcurrency":2,"hKeepAlivePeriod":15}}', w: 2, show: { net: ['xhttp'] } }
       ]
     },
     vmess: {
@@ -787,14 +810,16 @@ function renderPage(sources) {
         { k: 'addr', l: '地址 / IP', ph: '104.17.151.9', req: 1 },
         { k: 'port', l: '端口', ph: '443', req: 1 },
         { k: 'uuid', l: 'UUID', ph: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', w: 2, req: 1 },
-        { k: 'aid', l: 'alterId', ph: '0' },
-        { k: 'net', l: '传输方式', opts: ['tcp', 'ws', 'grpc', 'h2', 'xhttp'] },
-        { k: 'security', l: '传输安全', opts: ['tls', 'none'] },
-        { k: 'sni', l: 'SNI', ph: 'example.com' },
-        { k: 'host', l: 'Host', ph: 'example.com' },
-        { k: 'path', l: 'Path', ph: '/ws' },
-        { k: 'fp', l: '指纹 fp', opts: ['', 'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'] },
-        { k: 'alpn', l: 'ALPN', ph: 'h2,http/1.1' }
+
+        { k: 'security', l: '传输安全', g: 'net', opts: ['tls', 'none'] },
+        { k: 'net', l: '传输方式', g: 'net', opts: ['tcp', 'ws', 'grpc', 'h2', 'xhttp'] },
+        { k: 'sni', l: 'SNI', g: 'net', ph: 'example.com', show: { security: ['tls'] } },
+        { k: 'fp', l: '指纹 fp', g: 'net', opts: ['', 'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'], show: { security: ['tls'] } },
+        { k: 'alpn', l: 'ALPN', g: 'net', ph: 'h2,http/1.1', show: { security: ['tls'] } },
+        { k: 'host', l: 'Host', g: 'net', ph: 'example.com', show: { net: ['ws', 'h2', 'xhttp'] } },
+        { k: 'path', l: 'Path', g: 'net', ph: '/ws', show: { net: ['ws', 'h2', 'xhttp'] } },
+
+        { k: 'aid', l: 'alterId', g: 'adv', ph: '0' }
       ]
     },
     trojan: {
@@ -804,16 +829,19 @@ function renderPage(sources) {
         { k: 'addr', l: '地址 / IP', ph: '104.17.151.9', req: 1 },
         { k: 'port', l: '端口', ph: '443', req: 1 },
         { k: 'password', l: '密码', ph: '', w: 2, req: 1 },
-        { k: 'security', l: '传输安全', opts: ['tls', 'reality', 'none'] },
-        { k: 'net', l: '传输方式', opts: ['tcp', 'ws', 'grpc', 'xhttp'] },
-        { k: 'sni', l: 'SNI', ph: 'example.com' },
-        { k: 'host', l: 'Host', ph: 'example.com' },
-        { k: 'path', l: 'Path', ph: '/ws' },
-        { k: 'fp', l: '指纹 fp', opts: ['', 'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'] },
-        { k: 'alpn', l: 'ALPN', ph: 'h2,http/1.1' },
-        { k: 'serviceName', l: 'gRPC 服务名', ph: 'grpc' },
-        { k: 'allowInsecure', l: '允许不安全证书', opts: ['', '1'] },
-        { k: 'extra', l: 'extra（JSON，可留空）', ph: '', w: 2 }
+
+        { k: 'security', l: '传输安全', g: 'net', opts: ['tls', 'reality', 'none'] },
+        { k: 'net', l: '传输方式', g: 'net', opts: ['tcp', 'ws', 'grpc', 'xhttp'] },
+        { k: 'sni', l: 'SNI', g: 'net', ph: 'example.com', show: { security: ['tls', 'reality'] } },
+        { k: 'fp', l: '指纹 fp', g: 'net', opts: ['', 'chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'], show: { security: ['tls', 'reality'] } },
+        { k: 'alpn', l: 'ALPN', g: 'net', ph: 'h2,http/1.1', show: { security: ['tls', 'reality'] } },
+        { k: 'host', l: 'Host', g: 'net', ph: 'example.com', show: { net: ['ws', 'xhttp'] } },
+        { k: 'path', l: 'Path', g: 'net', ph: '/ws', show: { net: ['ws', 'xhttp'] } },
+
+        { k: 'serviceName', l: 'gRPC 服务名', g: 'adv', ph: 'grpc', show: { net: ['grpc'] } },
+        { k: 'insecure', l: 'insecure', g: 'adv', opts: ['', '0', '1'], show: { security: ['tls', 'reality'] } },
+        { k: 'allowInsecure', l: 'allowInsecure', g: 'adv', opts: ['', '0', '1'], show: { security: ['tls', 'reality'] } },
+        { k: 'extra', l: 'extra（JSON）', g: 'adv', ph: '', w: 2, show: { net: ['xhttp'] } }
       ]
     },
     ss: {
@@ -824,7 +852,8 @@ function renderPage(sources) {
         { k: 'port', l: '端口', ph: '8388', req: 1 },
         { k: 'method', l: '加密方式', opts: ['aes-256-gcm', 'aes-128-gcm', 'chacha20-ietf-poly1305', '2022-blake3-aes-128-gcm', '2022-blake3-chacha20-poly1305', 'none'] },
         { k: 'password', l: '密码', ph: '', req: 1 },
-        { k: 'plugin', l: '插件（可选）', ph: 'v2ray-plugin;mode=websocket;host=example.com', w: 2 }
+
+        { k: 'plugin', l: '插件（可选）', g: 'adv', ph: 'v2ray-plugin;mode=websocket;host=example.com', w: 2 }
       ]
     },
     hysteria2: {
@@ -834,11 +863,13 @@ function renderPage(sources) {
         { k: 'addr', l: '地址 / IP', ph: '104.17.151.9', req: 1 },
         { k: 'port', l: '端口', ph: '443', req: 1 },
         { k: 'password', l: '认证密码', ph: '', w: 2, req: 1 },
-        { k: 'sni', l: 'SNI', ph: 'example.com' },
-        { k: 'insecure', l: '跳过证书校验', opts: ['', '1'] },
-        { k: 'obfs', l: '混淆', opts: ['', 'salamander'] },
-        { k: 'obfs-password', l: '混淆密码', ph: '' },
-        { k: 'alpn', l: 'ALPN', ph: 'h3' }
+
+        { k: 'sni', l: 'SNI', g: 'net', ph: 'example.com' },
+        { k: 'alpn', l: 'ALPN', g: 'net', ph: 'h3' },
+        { k: 'obfs', l: '混淆', g: 'net', opts: ['', 'salamander'] },
+        { k: 'obfs-password', l: '混淆密码', g: 'net', ph: '', show: { obfs: ['salamander'] } },
+
+        { k: 'insecure', l: '跳过证书校验', g: 'adv', opts: ['', '0', '1'] }
       ]
     }
   };
@@ -1170,31 +1201,74 @@ function renderPage(sources) {
   }
 
   // ---------------- 表单 ----------------
+  // 字段是否该显示：show 里每个条件都得命中
+  function shown(f) {
+    if (!f.show) return true;
+    var keys = Object.keys(f.show);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      var cur = state[k];
+      cur = cur === undefined || cur === null ? '' : String(cur);
+      if (f.show[k].indexOf(cur) === -1) return false;
+    }
+    return true;
+  }
+
+  // 隐藏的字段不进链接。值本身留着，切回来还在。
+  function activeState() {
+    var p = SCHEMA[protoSel.value];
+    var out = {};
+    for (var key in state) {
+      if (Object.prototype.hasOwnProperty.call(state, key)) out[key] = state[key];
+    }
+    for (var i = 0; i < p.fields.length; i++) {
+      if (!shown(p.fields[i])) out[p.fields[i].k] = '';
+    }
+    return out;
+  }
+
+  function fieldHtml(f, def) {
+    var v = state[f.k];
+    if (v === undefined || v === null) v = def[f.k] !== undefined ? def[f.k] : (f.opts ? f.opts[0] : '');
+    // 默认值要同步进 state，否则显示条件读不到当前值，一上来就把该显示的框藏了
+    if (state[f.k] === undefined || state[f.k] === null) state[f.k] = v;
+
+    var html = '<div class="fld' + (f.w === 2 ? ' w2' : '') + '" data-fld="' + esc(f.k) + '">';
+    html += '<label>' + esc(f.l) + (f.req ? '<i>必填</i>' : '') + '</label>';
+
+    if (f.opts) {
+      html += '<select data-k="' + esc(f.k) + '">';
+      for (var j = 0; j < f.opts.length; j++) {
+        var o = f.opts[j];
+        html += '<option value="' + esc(o) + '"' + (o === v ? ' selected' : '') + '>' + (o === '' ? '不填' : esc(o)) + '</option>';
+      }
+      html += '</select>';
+    } else {
+      html += '<input data-k="' + esc(f.k) + '" value="' + esc(v) + '" placeholder="' + esc(f.ph || '') + '" spellcheck="false" autocomplete="off">';
+    }
+    return html + '</div>';
+  }
+
   function renderForm() {
     var proto = protoSel.value;
     var p = SCHEMA[proto];
     var def = DEFAULTS[proto] || {};
-    var html = '';
+    var base = [], net = [], adv = [];
 
     for (var i = 0; i < p.fields.length; i++) {
       var f = p.fields[i];
-      var v = state[f.k];
-      if (v === undefined || v === null) v = def[f.k] !== undefined ? def[f.k] : (f.opts ? f.opts[0] : '');
+      var h = fieldHtml(f, def);
+      if (f.g === 'net') net.push(h);
+      else if (f.g === 'adv') adv.push(h);
+      else base.push(h);
+    }
 
-      html += '<div class="fld' + (f.w === 2 ? ' w2' : '') + '">';
-      html += '<label>' + esc(f.l) + (f.req ? '<i>必填</i>' : '') + '</label>';
-
-      if (f.opts) {
-        html += '<select data-k="' + esc(f.k) + '">';
-        for (var j = 0; j < f.opts.length; j++) {
-          var o = f.opts[j];
-          html += '<option value="' + esc(o) + '"' + (o === v ? ' selected' : '') + '>' + (o === '' ? '不填' : esc(o)) + '</option>';
-        }
-        html += '</select>';
-      } else {
-        html += '<input data-k="' + esc(f.k) + '" value="' + esc(v) + '" placeholder="' + esc(f.ph || '') + '" spellcheck="false" autocomplete="off">';
-      }
-      html += '</div>';
+    var html = '<div class="grp"><div class="grp-t">基本信息</div><div class="grid">' + base.join('') + '</div></div>';
+    if (net.length) {
+      html += '<div class="grp"><div class="grp-t">传输与伪装</div><div class="grid">' + net.join('') + '</div></div>';
+    }
+    if (adv.length) {
+      html += '<details class="grp adv"><summary>高级参数（' + adv.length + '）</summary><div class="grid">' + adv.join('') + '</div></details>';
     }
 
     formEl.innerHTML = html;
@@ -1224,26 +1298,38 @@ function renderPage(sources) {
   function update() {
     var proto = protoSel.value;
     var p = SCHEMA[proto];
-    var missing = [];
+    var s = activeState();
+
+    // 先按显示条件收起不适用的框
     for (var i = 0; i < p.fields.length; i++) {
       var f = p.fields[i];
-      if (f.req && !tr(state[f.k])) missing.push(f.l);
+      var wrap = formEl.querySelector('[data-fld="' + f.k + '"]');
+      if (wrap) {
+        if (shown(f)) wrap.classList.remove('hide');
+        else wrap.classList.add('hide');
+      }
+    }
+
+    var missing = [];
+    for (var j = 0; j < p.fields.length; j++) {
+      var fd = p.fields[j];
+      if (fd.req && shown(fd) && !tr(s[fd.k])) missing.push(fd.l);
     }
 
     var uri = '';
-    try { uri = BUILDERS[proto](state) || ''; } catch (e) { uri = ''; }
+    try { uri = BUILDERS[proto](s) || ''; } catch (e) { uri = ''; }
     outEl.value = uri;
 
     var meta = uri.length + ' 字符';
     if (missing.length) meta += ' · 还差 ' + missing.join('、');
-    if (tr(state.extra)) {
-      try { JSON.parse(tr(state.extra)); }
+    if (tr(s.extra)) {
+      try { JSON.parse(tr(s.extra)); }
       catch (e) { meta += ' · extra 不是合法 JSON'; }
     }
     metaEl.textContent = meta;
     metaEl.className = 'meta' + (missing.length ? ' bad' : '');
 
-    renderChips(proto, missing);
+    renderChips(proto, missing, s);
 
     // 分享链接生成过一次就跟着参数走，不用每次重新点
     if (shareOn && uri) {
@@ -1254,18 +1340,18 @@ function renderPage(sources) {
     }
   }
 
-  function renderChips(proto, missing) {
+  function renderChips(proto, missing, s) {
     var p = SCHEMA[proto];
-    var chips = [['协议', p.label], ['地址', tr(state.addr) || '—'], ['端口', tr(state.port) || '—']];
+    var chips = [['协议', p.label], ['地址', tr(s.addr) || '—'], ['端口', tr(s.port) || '—']];
 
     if (proto === 'vless' || proto === 'vmess' || proto === 'trojan') {
-      if (state.net) chips.push(['传输', state.net]);
-      if (state.security) chips.push(['安全', state.security]);
-      if (tr(state.host)) chips.push(['Host', tr(state.host)]);
+      if (s.net) chips.push(['传输', s.net]);
+      if (s.security) chips.push(['安全', s.security]);
+      if (tr(s.host)) chips.push(['Host', tr(s.host)]);
     }
-    if (proto === 'ss' && state.method) chips.push(['加密', state.method]);
-    if (proto === 'hysteria2' && state.obfs) chips.push(['混淆', state.obfs]);
-    if (tr(state.name)) chips.push(['备注', tr(state.name)]);
+    if (proto === 'ss' && s.method) chips.push(['加密', s.method]);
+    if (proto === 'hysteria2' && s.obfs) chips.push(['混淆', s.obfs]);
+    if (tr(s.name)) chips.push(['备注', tr(s.name)]);
 
     var html = '';
     for (var i = 0; i < chips.length; i++) {
@@ -1325,6 +1411,19 @@ function renderPage(sources) {
     fillState(got.data);
     renderForm();
     update();
+
+    // 解析出来的节点如果带高级参数，自动展开那一折，别让人以为丢了
+    var advBox = formEl.querySelector('details.adv');
+    if (advBox) {
+      var pr = SCHEMA[got.proto];
+      var hasAdv = false;
+      for (var i = 0; i < pr.fields.length; i++) {
+        var fd = pr.fields[i];
+        if (fd.g === 'adv' && tr(state[fd.k])) { hasAdv = true; break; }
+      }
+      advBox.open = hasAdv;
+    }
+
     msg.textContent = '已识别为 ' + SCHEMA[got.proto].label + '，字段已填好，直接改就行。';
   });
 
