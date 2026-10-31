@@ -200,11 +200,19 @@ function handleShare(q) {
 // 保留原功能的辅助
 // ==========================================
 
-// Cloudflare 后台的变量输入框偶尔把换行吃掉，几个源会粘成一整行：
+// Cloudflare 后台的变量框是单行的，换行粘进去会被吃掉，几条源就粘成一整行：
 //   移动优选|https://a.txt电信优选|https://b.txt
-// 结果被当成一条源、一个畸形 URL，拉取直接 404。
-// 只在「整段一个换行都没有」且「至少两个 |」时才猜，且在「中文名 + |」处断行，
-// 不会去动 URL 里的 ASCII。ASCII 源名粘一起的情况仍然猜不出来，只能改配置。
+// 结果被当成一条源、一个畸形 URL，拉取直接 404。三条路一起兜：
+//   1. 字面量 \n（反斜杠 + n）当换行，单行框里能直接打
+//   2. || 当分隔符
+//   3. 实在什么都没有，就猜：整段没有换行且多个 | 时，在「中文名 + |」处断行
+// 前两条是确定的，第三条只在中文源名下生效，ASCII 源名粘一起仍然要回去改配置。
+function normalizeAddr(text) {
+  return String(text || '')
+    .replace(/\\r\\n|\\n|\\r/g, '\n')
+    .replace(/\|\|/g, '\n');
+}
+
 function repairGlued(text) {
   const src = String(text || '');
   if (/\r|\n/.test(src)) return src;
@@ -213,7 +221,7 @@ function repairGlued(text) {
 }
 
 function parseSources(addrStr) {
-  return repairGlued(addrStr).split(/\r?\n/).map((item, idx) => {
+  return repairGlued(normalizeAddr(addrStr)).split(/\r?\n/).map((item, idx) => {
     const trimmed = item.trim();
     if (!trimmed) return null;
     if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith(';')) return null;

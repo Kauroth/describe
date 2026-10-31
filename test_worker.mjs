@@ -107,6 +107,18 @@ const plain2 = await worker.fetch(new Request(base + '?sources=1'), { ADDR: 'A|h
 const p2 = JSON.parse(await plain2.text());
 ok('正常多行不受影响', p2.count === 2 && p2.sources[1].urls.length === 2);
 
+line('2d) 单行 ADDR 的三种写法');
+for (const [label, addr, want] of [
+  ['字面量 \\n', '甲|https://a.test/x.txt\\n乙|https://b.test/y.txt', 2],
+  ['|| 分隔', '甲|https://a.test/x.txt||乙|https://b.test/y.txt', 2],
+  ['ASCII 名 + ||', 'cmcc|https://a.test/x.txt||ctcc|https://b.test/y.txt', 2],
+  ['单源不动', '甲|https://a.test/x.txt,https://a.test/z.txt', 1]
+]) {
+  const rr = await worker.fetch(new Request(base + '?sources=1'), { ADDR: addr });
+  const dd = JSON.parse(await rr.text());
+  ok(label, dd.count === want, String(dd.count));
+}
+
 // ============ 3. probe ============
 line('3) ?probe=1 候选回退');
 r = await call(base + '?probe=1');
